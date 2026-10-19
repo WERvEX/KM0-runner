@@ -58,6 +58,8 @@ class ExecutionReport(BaseModel):
     title: str = ""
     predicted_tier: Tier | None
     """KM0's tier; None when the task was not routed by KM0."""
+    predicted_features: dict | None = None
+    """KM0's task features behind that tier, for calibration."""
     start_tier: Tier
     solved_tier: Tier | None
     escalations: list[Escalation] = Field(default_factory=list)
@@ -69,6 +71,8 @@ class ExecutionReport(BaseModel):
     handoff: HandoffMode
     config_hash: str
     runner_version: str
+    run_index: int = 0
+    """Which repeat of the task this is, when tasks run several times."""
     attempts: list[Attempt] = Field(default_factory=list)
     patch: str = ""
     """`git diff` of the final repository state."""
