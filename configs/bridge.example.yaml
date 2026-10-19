@@ -1,0 +1,17 @@
+# Test without an API key: every model request becomes a file in $KM0_BRIDGE_DIR and waits for an
+# answer file (e.g. written by a fresh Claude subagent per request). See "File bridge" in the README.
+tiers:
+  T1:
+    model_name: bridge/haiku
+    model_class: km0_runner.bridge.FileBridgeModel
+    step_limit: 8
+  T2:
+    model_name: bridge/sonnet
+    model_class: km0_runner.bridge.FileBridgeModel
+    step_limit: 15
+  T3:
+    model_name: bridge/opus
+    model_class: km0_runner.bridge.FileBridgeModel
+    step_limit: 20
+handoff: discard
+agent_config: mini_textbased.yaml
