@@ -1,0 +1,7 @@
+# Stage 0 baseline: everything on the cheap model, no escalation.
+tiers:
+  T1:
+    model_name: openai/CHEAP-MODEL
+    step_limit: 100
+    cost_limit: 4.0
+agent_config: swebench.yaml

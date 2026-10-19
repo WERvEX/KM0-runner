@@ -1,0 +1,7 @@
+# Stage 0 baseline: everything on the strong model.
+tiers:
+  T3:
+    model_name: anthropic/STRONG-MODEL
+    step_limit: 100
+    cost_limit: 4.0
+agent_config: swebench.yaml
