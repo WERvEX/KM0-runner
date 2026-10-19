@@ -1,12 +1,11 @@
 [project]
 name = "km0-runner"
 version = "0.1.0"
-description = "Runs KM0 task packages on a tier ladder of models, escalates on trajectory signals, and reports back for routing calibration."
+description = "Runs KM0 task packages with pi on a ladder of model tiers, escalates on trajectory signals, and reports back for KM0 acceptance and routing calibration."
 readme = "README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0"
 dependencies = [
-  "mini-swe-agent>=2.4,<3",
   "pydantic>=2",
   "pyyaml>=6",
 ]

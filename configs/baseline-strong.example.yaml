@@ -1,7 +1,10 @@
-# Stage 0 baseline: everything on the strong model.
-tiers:
-  T3:
-    model_name: anthropic/STRONG-MODEL
+# Baseline: one rung, so every task runs on the strong model and nothing escalates.
+pi:
+  command: [pi]
+  models_json: ~/.pi/agent/models.json
+ladder:
+  - name: T1
+    model: relay/STRONG-MODEL
     step_limit: 100
     cost_limit: 4.0
-agent_config: swebench.yaml
+km0_tiers: {T1: T1, T2: T1, T3: T1}

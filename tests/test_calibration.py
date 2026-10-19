@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from km0_runner.acceptance import Verdict, load_verdicts
 from km0_runner.calibrate import calibrate, evaluate, samples, task_cost, tier_costs
 from km0_runner.dataset import split
 from km0_runner.report import Attempt, ExecutionReport, TestResult
@@ -36,16 +37,16 @@ def test_hard_rules_match_km0():
     assert decide_tier(features(reasoning="design")) == "T3"
 
 
-def report(task_id, feats, solved, start="T1", costs=None, run_index=0, judged=True):
+def report(task_id, feats, solved, start="T1", costs=None, run_index=0, judged=True, run_id="r"):
     tiers = ["T1", "T2", "T3"]
     end = tiers.index(solved) if solved else 2
     attempts = [
-        Attempt(tier=t, model=t, exit_status="Submitted", signal=None, steps=1,
-                cost=(costs or {"T1": 0.1, "T2": 0.3, "T3": 1.0})[t], wall_time=1, test_result=None, trajectory=None)
+        Attempt(tier=t, model=t, steps=1, cost=(costs or {"T1": 0.1, "T2": 0.3, "T3": 1.0})[t], wall_time=1,
+                stop_reason="settled")
         for t in tiers[tiers.index(start): end + 1]
     ]
     return ExecutionReport(
-        task_id=task_id, source="swebench", predicted_tier=decide_tier(TaskFeatures.model_validate(feats)),
+        run_id=run_id, task_id=task_id, source="swebench", predicted_tier=decide_tier(TaskFeatures.model_validate(feats)),
         predicted_features=feats, start_tier=start, solved_tier=solved, cost=sum(a.cost for a in attempts),
         steps=len(attempts), wall_time=1, test_result=TestResult(passed=bool(solved) if judged else None, judge="t"),
         failure_category=None if solved else "tests_failed", handoff="discard", config_hash="h",
@@ -85,13 +86,38 @@ def test_calibration_improves_dev_and_holds_on_test():
     assert set(json.loads(result.rules.model_dump_json())) == {"featurePoints", "tierLimits"}
 
 
-def test_samples_skip_unjudged_unfeatured_and_censored_reports():
+def test_samples_label_the_cheapest_tier_km0_accepted():
     feats = dict(BASE)
-    kept = report("a", feats, "T1")
-    started_high = report("b", feats, "T3", start="T2")
+    climbed = report("a", feats, "T2")  # failed T1, passed T2
+    started_high = report("b", feats, "T3", start="T2")  # T1 never tried: an upper bound
     unjudged = report("c", feats, None, judged=False)
     no_features = report("d", feats, "T1").model_copy(update={"predicted_features": None})
-    assert [s.task_id for s in samples([kept, started_high, unjudged, no_features])] == ["a"]
+    got = {s.task_id: (s.needed, s.censored) for s in samples([climbed, started_high, unjudged, no_features])}
+    assert got == {"a": ("T2", False), "b": ("T3", True)}
+
+
+def test_samples_follow_km0_verdicts_across_runs():
+    feats = dict(BASE)
+    first = report("a", feats, "T1", run_id="r1")  # tests passed on T1, but KM0 rejected it
+    again = report("a", feats, "T2", start="T2", run_id="r2")  # redistributed one tier up, accepted
+    explored = report("b", feats, "T1", run_id="r1")  # explored down to T1 and accepted
+    verdicts = {
+        ("r1", "a"): Verdict(task_id="a", accepted=False),
+        ("r2", "a"): Verdict(task_id="a", accepted=True),
+        ("r1", "b"): Verdict(task_id="b", accepted=False, user_override=True),
+    }
+    got = {s.task_id: (s.needed, s.censored) for s in samples([first, again, explored], verdicts)}
+    assert got == {"a": ("T2", False), "b": ("T1", False)}
+
+
+def test_load_verdicts(tmp_path):
+    run = tmp_path / "r7"
+    run.mkdir()
+    (run / "acceptance.jsonl").write_text(
+        '{"task_id": "01", "accepted": false, "judged_by": "m"}\n{"task_id": "01", "accepted": true}\n'
+    )
+    verdicts = load_verdicts([tmp_path])
+    assert list(verdicts) == [("r7", "01")] and verdicts[("r7", "01")].final
 
 
 def test_tier_costs_fall_back_for_tiers_never_run():
