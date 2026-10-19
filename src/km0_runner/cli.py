@@ -33,7 +33,8 @@ def run_run(args: argparse.Namespace) -> int:
     package = load_km0_package(args.package)
     only = [f"{int(t):02d}" for t in args.tasks] if args.tasks else None
     run_dir, reports = run_package(
-        package, args.repo, config, args.runs, args.run_id, pi_version=version, only=only, start=args.start_tier
+        package, args.repo, config, args.runs, args.run_id, pi_version=version, only=only, start=args.start_tier,
+        reuse=args.reuse
     )
     summary = json.loads((run_dir / "summary.json").read_text())
     print(
@@ -177,6 +178,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--repo", required=True, help="git repository to work in; each task gets a worktree and branch")
     common(run)
     run.add_argument("--tasks", nargs="*", help="task seq numbers to run; default: all")
+    run.add_argument(
+        "--reuse", metavar="RUN_ID", help="upstream tasks left out of --tasks start from this earlier run's branches"
+    )
     run.set_defaults(func=run_run)
 
     smoke = sub.add_parser("smoke", help="stage 0 check: pi edits a file, then switches model once")

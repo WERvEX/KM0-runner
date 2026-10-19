@@ -172,6 +172,9 @@ def test_order_and_exploration():
                      for i in range(200)]  # reproducible
     assert all(start_tier(config, risky, f"r{i}") == ("T2", False) for i in range(50))
     assert start_tier(config, RunTask(task_id="x", title="", prompt="", predicted_tier="T1"), "r") == ("T1", False)
+    # KM0 hands this one off again after a rejection: it starts on its tier every time.
+    lifted = RunTask(task_id="04", title="", prompt="", predicted_tier="T2", retry=True)
+    assert all(start_tier(ladder(exploration={"rate": 1.0}), lifted, f"r{i}") == ("T2", False) for i in range(20))
 
 
 def test_ladder_mapping():
@@ -179,3 +182,21 @@ def test_ladder_mapping():
     assert config.start_rung("T1") == "T2" and config.start_rung("T3") == "T3" and config.start_rung(None) == "T1"
     four = ladder(ladder=[{"name": n, "model": f"p/{n}"} for n in ("A", "B", "C", "D")])
     assert four.start_rung("T2") == "B" and four.above("C") == "D" and four.below("A") is None
+
+
+def test_redo_one_task_on_top_of_an_earlier_run(tmp_path, repo):
+    write_package(repo, [{}, {"dependsOn": [1], "testCommand": "test -e two.txt"}])
+    runs = {"cheap": [[FIX, done()], [bash("touch two.txt"), done()]]}
+    _, _, [one, _] = run(tmp_path, repo, runs)
+    # KM0 rejected task 2; only it runs again, starting from task 1's accepted branch.
+    (tmp_path / "again").mkdir()
+    fake = FakePi(tmp_path / "again", {"cheap": [[bash("echo 2 > two.txt"), done()]]})
+    _, [two] = run_package(load_km0_package(repo), repo, ladder(), tmp_path / "runs", "r2", pi_factory=fake,
+                           pi_version="1.3.0", only=["02"], reuse="r1", log=lambda line: None)
+
+    assert two.base_commit == one.commit and two.solved_tier == "T1"
+    assert "a + b" in branch_file(repo, "km0/r2/02") and branch_file(repo, "km0/r2/02", "two.txt") == "2\n"
+    # Without a run to reuse, the missing upstream task blocks it.
+    _, [blocked] = run_package(load_km0_package(repo), repo, ladder(), tmp_path / "runs", "r3", pi_factory=fake,
+                               pi_version="1.3.0", only=["02"], log=lambda line: None)
+    assert blocked.failure_category == "blocked"

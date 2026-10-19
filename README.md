@@ -43,6 +43,15 @@ dependency order. The user's checkout is never touched: each task gets a worktre
 order. The Runner commits the task's changes there (never `km0/`), removes the worktree and keeps the branch.
 It never pushes or merges.
 
+When KM0 rejects a task, it hands the task off again one tier higher (`retry: true` in `tasks.json`; such a
+task is never explored lower). Redo only that task on top of the tasks KM0 accepted:
+
+```bash
+km0-runner run path/to/km0 --repo path/to/repo -c runner.yaml --tasks 2 --reuse <earlier run_id>
+```
+
+Upstream tasks left out of `--tasks` then start from the earlier run's branches.
+
 ## How a task runs
 
 1. **Start tier.** KM0's tier maps onto the ladder through `km0_tiers`. With `exploration.rate` set, that
@@ -134,7 +143,10 @@ km0-runner plot runs/strong runs/cheap runs/cascade -o scatter.png   # cost vs s
 `<folder>/NNNN.request.md` (the conversation as text: system prompt, tools, messages, tool calls and
 results) and `NNNN.request.json`. The bridge then waits for `NNNN.response.json`, either
 `{"text": "..."}` or `{"tool_calls": [{"name": "bash", "arguments": {"command": "pytest -q"}}]}`. Someone
-answers each request, such as a fresh model session that reads only that request. Answers are cached by
+answers each request, such as a fresh model session that reads only that request. KM0 itself can use
+the same bridge: an OpenAI-compatible model profile with its base URL and structured output mode "prompt"
+sends triage, questions, documents, task breakdown and acceptance through it too, so the whole loop runs
+without a key. Answers are cached by
 request content, so a rerun only asks again where the conversation changed. This tests the Runner and the
 prompts rather than a provider; token counts are rough estimates. `--script answers.jsonl` replays fixed
 answers instead, which is how `tests/test_real_pi.py` drives the real pi end to end.
