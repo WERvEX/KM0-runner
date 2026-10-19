@@ -99,7 +99,31 @@ The execution report (`src/km0_runner/report.py`):
 | `config_hash` | hash of the config, Runner and mini-swe-agent versions, for reproducing a run |
 | `attempts` | per-attempt tier, model, exit status, signal, cost and trajectory path |
 
+## Calibrating KM0's routing rules
+
+```bash
+# A fixed subset, stratified by repository; the same seed always gives the same split
+km0-runner dataset --source verified --size 60 -o data
+
+# KM0 triages each issue; its tier and features go in a JSON object:
+# {"<instance_id>": {"tier": "T2", "features": {...}}}
+# Calibration needs the tier each task actually required, so start every task on T1
+km0-runner swebench -c cascade.yaml -o runs/dev --instances data/dev.jsonl --predicted km0.json --start-tier T1 --repeats 3
+km0-runner swebench -c cascade.yaml -o runs/test --instances data/test.jsonl --predicted km0.json --start-tier T1 --repeats 3
+
+# Fit points and tier limits on dev, check on test; KM0 imports routing-rules.json in Settings → Agents
+km0-runner calibrate --dev runs/dev --test runs/test -o routing-rules.json
+
+# One point per configuration, with 95% bootstrap intervals over tasks
+km0-runner plot runs/strong runs/cheap runs/cascade -o scatter.png
+```
+
+The objective is the expected cascade cost from measured per-tier costs; accuracy, under- and
+over-prediction are reported alongside. `src/km0_runner/scoring.py` is a port of KM0's rules and has to
+stay in step with `packages/core/src/routing/scoring.ts`.
+
 ## Status
 
-Stage 1 code (ladder, signals, handoffs, reports) is in place and tested with scripted models. Stage 0, the
-two baselines on a small SWE-bench Verified subset, is next and needs the three models chosen and API keys.
+Stage 1 code (ladder, signals, handoffs, reports), the dataset split, statistics and calibration are in
+place and tested with scripted models. Real runs need API keys: stage 0 baselines, SWE-bench harness runs,
+and KM0's triage of the issues for predicted tiers and features.

@@ -16,6 +16,8 @@ class RunTask(BaseModel):
     title: str
     prompt: str
     predicted_tier: Tier | None
+    predicted_features: dict[str, Any] | None = None
+    """KM0's `TaskFeatures` behind the tier, when KM0 exported them; calibration replays the rules on them."""
     source: Literal["km0", "swebench"]
     instance: dict[str, Any] | None = None
     """The SWE-bench instance, for the environment and the judge."""
@@ -42,6 +44,7 @@ def load_km0_package(path: str | Path) -> list[RunTask]:
                 title=task["title"],
                 prompt=(base / task["prompt"]).read_text(encoding="utf-8"),
                 predicted_tier=task["tier"],
+                predicted_features=task.get("features"),
                 source="km0",
             )
             for task in sorted(tasks, key=lambda task: task["seq"])
@@ -54,6 +57,7 @@ def load_km0_package(path: str | Path) -> list[RunTask]:
             title=task["title"],
             prompt=task["prompt"],
             predicted_tier=task["tier"],
+            predicted_features=task.get("features"),
             source="km0",
         )
         for task in sorted(package["tasks"], key=lambda task: task["seq"])
@@ -69,22 +73,35 @@ def unpack_km0_package(path: str | Path, repo: str | Path) -> None:
         target.write_text(file["content"], encoding="utf-8")
 
 
-def load_swebench_instances(
-    path: str | Path, predicted: dict[str, Tier] | None = None, ids: list[str] | None = None
-) -> list[RunTask]:
-    """SWE-bench instances from a JSON array or JSONL file, with KM0's tiers from `predicted` when given."""
+def read_rows(path: str | Path) -> list[dict[str, Any]]:
+    """Rows of a JSON array or JSONL file."""
     text = Path(path).read_text(encoding="utf-8").strip()
-    rows = json.loads(text) if text.startswith("[") else [json.loads(line) for line in text.splitlines() if line]
+    return json.loads(text) if text.startswith("[") else [json.loads(line) for line in text.splitlines() if line]
+
+
+def load_swebench_instances(
+    path: str | Path, predicted: dict[str, Any] | None = None, ids: list[str] | None = None
+) -> list[RunTask]:
+    """SWE-bench instances, with KM0's predictions when given.
+
+    `predicted` maps instance id to a tier (`"T2"`) or to `{"tier": "T2", "features": {...}}`.
+    """
     wanted = set(ids) if ids else None
-    return [
-        RunTask(
-            task_id=row["instance_id"],
-            title=row["instance_id"],
-            prompt=row["problem_statement"],
-            predicted_tier=(predicted or {}).get(row["instance_id"]),
-            source="swebench",
-            instance=row,
+    tasks = []
+    for row in read_rows(path):
+        if wanted is not None and row["instance_id"] not in wanted:
+            continue
+        guess = (predicted or {}).get(row["instance_id"])
+        guess = {"tier": guess} if isinstance(guess, str) else guess or {}
+        tasks.append(
+            RunTask(
+                task_id=row["instance_id"],
+                title=row["instance_id"],
+                prompt=row["problem_statement"],
+                predicted_tier=guess.get("tier"),
+                predicted_features=guess.get("features"),
+                source="swebench",
+                instance=row,
+            )
         )
-        for row in rows
-        if wanted is None or row["instance_id"] in wanted
-    ]
+    return tasks

@@ -96,10 +96,10 @@ class Cascade:
         self.patch_command = patch_command
         self.base = get_config_from_spec(config.agent_config)
 
-    def run(self, task: RunTask, start_tier: Tier | None = None) -> ExecutionReport:
+    def run(self, task: RunTask, start_tier: Tier | None = None, run_index: int = 0) -> ExecutionReport:
         config = self.config
         tier = config.start_tier(start_tier or task.predicted_tier or "T1")
-        task_dir = self.out_dir / task.task_id
+        task_dir = self.out_dir / (task.task_id if run_index == 0 else f"{task.task_id}.r{run_index}")
         task_dir.mkdir(parents=True, exist_ok=True)
         steps_log = (task_dir / "steps.jsonl").open("w", encoding="utf-8")
 
@@ -165,6 +165,7 @@ class Cascade:
             source=task.source,
             title=task.title,
             predicted_tier=task.predicted_tier,
+            predicted_features=task.predicted_features,
             start_tier=attempts[0].tier if attempts else tier,
             solved_tier=solved,
             escalations=escalations,
@@ -176,6 +177,7 @@ class Cascade:
             handoff=config.handoff,
             config_hash=config.hash(),
             runner_version=__version__,
+            run_index=run_index,
             attempts=attempts,
             patch=patch,
         )
