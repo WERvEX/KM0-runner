@@ -30,7 +30,7 @@ EnvFactory = Callable[[RunTask, dict], Environment]
 ModelFactory = Callable[[TierModel, dict], Model]
 """Builds a tier's model from its rung and the agent config's `model` section."""
 
-PATCH_COMMAND = "git add -A && git diff --cached"
+PATCH_COMMAND = "git add -A -- . ':!**/__pycache__/**' ':!*.pyc' && git diff --cached"
 
 HANDOFF_NOTE = """\
 <handoff>
@@ -193,11 +193,12 @@ class Cascade:
         agent = WatchedAgent(model, env, monitor=monitor, **agent_section)
         original = monitor.observe
 
-        def logged(command: str, returncode: int | None):
-            signal = original(command, returncode)
+        def logged(command: str, returncode: int | None, output: str = ""):
+            signal = original(command, returncode, output)
             record = {"attempt": number, "tier": tier, "step": monitor.steps, "command": command}
             record |= {"returncode": returncode, "signal": signal.name if signal else None}
             steps_log.write(json.dumps(record, ensure_ascii=False) + "\n")
+            steps_log.flush()
             return signal
 
         monitor.observe = logged  # type: ignore[method-assign]

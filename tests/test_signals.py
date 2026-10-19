@@ -42,3 +42,11 @@ def test_step_budget():
     assert monitor.start_step() is None
     assert monitor.start_step() is None
     assert monitor.start_step().name == "step_budget"
+
+
+def test_piped_test_run_counts_as_failure_from_its_output():
+    monitor = SignalMonitor(SignalConfig(test_fail_streak=2), step_limit=0)
+    assert monitor.observe("python -m pytest -q 2>&1 | tail -n 5", 0, "8 failed, 2 passed in 0.1s") is None
+    signal = monitor.observe("pytest -q | tail", 0, "FAILED tests/test_a.py::test_x - assert 1 == 2")
+    assert signal and signal.name == "test_fail_streak"
+    assert monitor.observe("pytest -q | tail", 0, "10 passed in 0.02s") is None

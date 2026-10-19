@@ -15,6 +15,10 @@ TEST_COMMAND = re.compile(
     r"(npm|pnpm|yarn)\s+(run\s+)?test|vitest|jest|go\s+test|cargo\s+test|mvn\s+test|gradle\w*\s+test|make\s+test"
     r")(?=\s|$)"
 )
+# Test summaries that mean failure even when a pipe (`pytest | tail`) hides the exit code.
+TEST_FAILED_OUTPUT = re.compile(
+    r"\b\d+ (failed|errors?)\b|^FAILED |^ERROR |Tests:\s+\d+ failed|^--- FAIL|test result: FAILED", re.MULTILINE
+)
 # File targets of the edit commands a bash-only agent uses: `sed -i`, redirections, `tee`.
 SED_INPLACE = re.compile(r"\bsed\s+(?:-\w*i\w*|--in-place)\b")
 REDIRECT = re.compile(r"(?<![0-9&<>])>{1,2}\s*(?!&)([^\s;&|<>]+)")
@@ -76,10 +80,11 @@ class SignalMonitor:
         self.steps += 1
         return None
 
-    def observe(self, command: str, returncode: int | None) -> Signal | None:
+    def observe(self, command: str, returncode: int | None, output: str = "") -> Signal | None:
         step = self.steps
         if is_test_command(command):
-            self.fail_streak = self.fail_streak + 1 if returncode not in (0, None) else 0
+            failed = returncode not in (0, None) or bool(TEST_FAILED_OUTPUT.search(output))
+            self.fail_streak = self.fail_streak + 1 if failed else 0
             if self.fail_streak >= self.config.test_fail_streak:
                 return Signal("test_fail_streak", f"{self.fail_streak} failing test runs in a row", step)
 

@@ -32,7 +32,7 @@ def run_km0(args: argparse.Namespace) -> int:
         tasks = [task for task in tasks if task.task_id in {f"{int(t):02d}" for t in args.tasks}]
     judge: Judge = CommandJudge(args.test_command) if args.test_command else NoJudge()
     # The package's own folder is not part of the work.
-    cascade = Cascade(config, args.out, judge=judge, patch_command="git add -A -- . ':!km0' && git diff --cached")
+    cascade = Cascade(config, args.out, judge=judge, patch_command="git add -A -- . ':!km0' ':!**/__pycache__/**' ':!*.pyc' && git diff --cached")
     return _run_all(cascade, tasks, args)
 
 

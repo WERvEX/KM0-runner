@@ -44,6 +44,15 @@ km0-runner summarize runs/dev
 
 Model API keys are read from the environment as LiteLLM expects (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …).
 
+## File bridge (no API key)
+
+With `model_class: km0_runner.bridge.FileBridgeModel` (see `configs/bridge.example.yaml`), each model
+request is written to `$KM0_BRIDGE_DIR/NNNN.request.json` (model name plus the full conversation) and the
+Runner waits for `NNNN.response.md`: the next assistant turn in mini-swe-agent's text format, one
+```` ```mswea_bash_command ```` block. Whoever watches the directory answers; answers are cached by request
+content, so a re-run only asks again where the conversation changed. This tests the loop, signals and
+reports, not API integration: there are no token counts, so cost is 0.
+
 ## How a task runs
 
 1. Start on KM0's predicted tier (`--start-tier` overrides it; a ladder without that tier starts on the next

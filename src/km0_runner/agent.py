@@ -39,7 +39,9 @@ class WatchedAgent(DefaultAgent):
         for action in actions:
             output = self.env.execute(action)  # raises Submitted when the agent finishes
             outputs.append(output)
-            fired = fired or self.monitor.observe(action.get("command", ""), output.get("returncode"))
+            fired = fired or self.monitor.observe(
+                action.get("command", ""), output.get("returncode"), output.get("output", "")
+            )
         observed = self.add_messages(
             *self.model.format_observation_messages(message, outputs, self.get_template_vars())
         )
