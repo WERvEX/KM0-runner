@@ -49,7 +49,8 @@ def start_tier(config: RunnerConfig, task: RunTask, run_id: str, forced: Tier | 
     predicted = config.start_rung(task.predicted_tier)
     lower = config.below(predicted)
     exploration = config.exploration
-    if lower is None or exploration.rate <= 0 or (exploration.only_low_risk and task.risky):
+    # A task KM0 hands off again after a failure or a rejection already showed a lower tier is not enough.
+    if lower is None or exploration.rate <= 0 or task.retry or (exploration.only_low_risk and task.risky):
         return predicted, False
     if explore_draw(exploration.seed, run_id, task.task_id) < exploration.rate:
         return lower, True

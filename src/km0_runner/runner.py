@@ -142,7 +142,13 @@ def run_package(
     only: list[str] | None = None,
     start: Tier | None = None,
     log: Callable[[str], None] = print,
+    reuse: str | None = None,
 ) -> tuple[Path, list[ExecutionReport]]:
+    """Run the package's tasks (or `only` those) in dependency order.
+
+    With `reuse`, upstream tasks left out of this run start from the branches run `reuse` made for them, so a
+    task KM0 rejected can be redone on top of the ones it accepted.
+    """
     run_id = run_id or new_run_id()
     run_dir = Path(runs_dir).resolve() / run_id
     (run_dir / "reports").mkdir(parents=True, exist_ok=True)
@@ -152,12 +158,15 @@ def run_package(
     tasks = order(package.tasks)
     if only:
         tasks = [task for task in tasks if task.task_id in only]
+    selected = {task.task_id for task in tasks}
+    reused = workspaces.reuse(reuse, [t.task_id for t in package.tasks if t.task_id not in selected]) if reuse else []
     (run_dir / "run.json").write_text(
         json.dumps(
             {
                 "run_id": run_id, "project_id": package.project_id, "repo": str(Path(repo).resolve()),
                 "start_commit": workspaces.start_commit, "config_hash": cascade.config_hash,
                 "pi_version": pi_version, "tasks": [task.task_id for task in tasks],
+                "reused": {task_id: workspaces.branch(task_id) for task_id in reused},
                 "config": config.model_dump(mode="json"),
             },
             indent=2,
@@ -168,7 +177,7 @@ def run_package(
     reports: dict[str, ExecutionReport] = {}
     for task in tasks:
         failed_upstream = [dep for dep in task.depends_on if dep in reports and reports[dep].failure_category is not None]
-        missing = [dep for dep in task.depends_on if dep not in reports]
+        missing = [dep for dep in task.depends_on if dep not in reports and dep not in workspaces.reused]
         if failed_upstream or missing:
             report = cascade.blocked(task, f"upstream tasks failed or did not run: {', '.join(failed_upstream + missing)}")
         else:

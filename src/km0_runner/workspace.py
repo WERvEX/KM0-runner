@@ -59,9 +59,21 @@ class Workspaces:
         if git(self.repo, "rev-parse", "--is-inside-work-tree", check=False) != "true":
             raise GitError(f"{self.repo} is not a git repository")
         self.start_commit = git(self.repo, "rev-parse", start_commit or "HEAD")
+        self.reused: dict[str, str] = {}
+        """Upstream tasks this run does not redo, by task id: the branch an earlier run left them on."""
 
     def branch(self, task_id: str) -> str:
-        return f"km0/{self.run_id}/{task_id}"
+        return self.reused.get(task_id) or f"km0/{self.run_id}/{task_id}"
+
+    def reuse(self, run_id: str, task_ids: list[str]) -> list[str]:
+        """Take these tasks from run `run_id`'s branches where they exist; returns the ids found."""
+        found = []
+        for task_id in task_ids:
+            branch = f"km0/{run_id}/{task_id}"
+            if git(self.repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}", check=False):
+                self.reused[task_id] = branch
+                found.append(task_id)
+        return found
 
     def create(self, task_id: str, upstream: list[str]) -> Workspace:
         """A worktree on a new branch; raises `MergeConflict` when the upstream branches do not merge."""

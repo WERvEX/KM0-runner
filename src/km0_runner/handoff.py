@@ -23,6 +23,8 @@ class RunTask(BaseModel):
     depends_on: list[str] = Field(default_factory=list)
     acceptance: list[str] = Field(default_factory=list)
     test_command: str | None = None
+    retry: bool = False
+    """KM0 hands the task off again after a failure or a rejection; it is never explored lower."""
     source: Literal["km0", "swebench"] = "km0"
     instance: dict[str, Any] | None = None
     """The SWE-bench instance, for the harness judge."""
@@ -97,6 +99,7 @@ def _task(entry: dict[str, Any], prompt: str) -> RunTask:
         depends_on=[pad(seq) for seq in entry.get("dependsOn", [])],
         acceptance=entry.get("acceptance", []),
         test_command=entry.get("testCommand") or None,
+        retry=bool(entry.get("retry")),
     )
 
 

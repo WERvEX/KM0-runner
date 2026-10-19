@@ -32,14 +32,22 @@ CHARS_PER_TOKEN = 4
 def render(body: dict[str, Any]) -> str:
     """The request as a person or a model would read it. Only messages, tool calls and results: no reasoning."""
     lines = [f"# Model request · model `{body.get('model')}`", ""]
-    lines += [
-        "Answer as the coding agent below would: decide its next step. Write the answer as JSON to the response",
-        'file named in the instructions you were given: {"tool_calls": [{"name": ..., "arguments": {...}}]} to',
-        'call tools, or {"text": "..."} when the task is finished and you report back. One or more tool calls',
-        "per answer; they run in order and you see their results in the next request.",
-        "",
-        "## Tools",
-    ]
+    if not body.get("tools"):
+        # KM0's own calls (triage, questions, documents, acceptance) have no tools: the answer is the reply text.
+        lines += [
+            "Answer as the assistant below would. Write the answer as JSON to the response file named in the",
+            'instructions you were given: {"text": "..."}, where the text is exactly the reply the system prompt',
+            "asks for (for example a JSON object, as a string).",
+        ]
+    else:
+        lines += [
+            "Answer as the coding agent below would: decide its next step. Write the answer as JSON to the response",
+            'file named in the instructions you were given: {"tool_calls": [{"name": ..., "arguments": {...}}]} to',
+            'call tools, or {"text": "..."} when the task is finished and you report back. One or more tool calls',
+            "per answer; they run in order and you see their results in the next request.",
+            "",
+            "## Tools",
+        ]
     for tool in body.get("tools") or []:
         function = tool.get("function", {})
         params = function.get("parameters", {}).get("properties", {})
