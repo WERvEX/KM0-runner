@@ -1,4 +1,4 @@
-"""Reading tasks: KM0 handoff packages and SWE-bench instances, both turned into `RunTask`."""
+"""Reading tasks from a KM0 handoff package (and, optionally, SWE-bench instances) into `RunTask`."""
 
 from __future__ import annotations
 
@@ -6,71 +6,102 @@ import json
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from .tiers import Tier
+HANDOFF_ROOT = "km0"
 
 
 class RunTask(BaseModel):
     task_id: str
     title: str
+    goal: str = ""
     prompt: str
-    predicted_tier: Tier | None
+    predicted_tier: str | None
     predicted_features: dict[str, Any] | None = None
-    """KM0's `TaskFeatures` behind the tier, when KM0 exported them; calibration replays the rules on them."""
-    source: Literal["km0", "swebench"]
+    """KM0's `TaskFeatures` behind the tier; calibration replays the rules on them."""
+    predicted_score: int | None = None
+    depends_on: list[str] = Field(default_factory=list)
+    acceptance: list[str] = Field(default_factory=list)
+    test_command: str | None = None
+    source: Literal["km0", "swebench"] = "km0"
     instance: dict[str, Any] | None = None
-    """The SWE-bench instance, for the environment and the judge."""
+    """The SWE-bench instance, for the harness judge."""
+
+    @property
+    def risky(self) -> bool:
+        return bool((self.predicted_features or {}).get("risks"))
+
+
+class Package(BaseModel):
+    root: Path
+    """The folder holding `tasks.json`, copied into each workspace as `km0/` when the repository lacks it."""
+    project_id: int | str | None = None
+    title: str = ""
+    tasks: list[RunTask]
 
 
 def pad(seq: int) -> str:
     return f"{seq:02d}"
 
 
-def load_km0_package(path: str | Path) -> list[RunTask]:
-    """Tasks from a KM0 handoff, either the package JSON KM0 builds or a repository it was unpacked into.
+def find_manifest(path: Path) -> Path:
+    for candidate in (path / HANDOFF_ROOT / "tasks.json", path / "tasks.json"):
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(f"no tasks.json in {path} or {path / HANDOFF_ROOT}")
 
-    The package JSON is KM0's `HandoffPackage` (`packages/shared/src/handoff.ts`). An unpacked repository
-    has `km0/tasks.json` and one prompt file per task under `km0/tasks/`.
+
+def load_km0_package(path: str | Path) -> Package:
+    """A KM0 handoff: a `km0/` folder (or a repository holding one), or the package JSON KM0 builds.
+
+    `tasks.json` lists the tasks; each `prompt` is a path such as `km0/tasks/01.md`, relative to the folder
+    that holds `km0/`. An optional `manifest.json` beside it carries the project id.
     """
-    path = Path(path)
-    if path.is_dir():
-        manifest = path / "km0" / "tasks.json" if (path / "km0").is_dir() else path / "tasks.json"
-        base = manifest.parent.parent
-        tasks = json.loads(manifest.read_text(encoding="utf-8"))
-        return [
-            RunTask(
-                task_id=pad(task["seq"]),
-                title=task["title"],
-                prompt=(base / task["prompt"]).read_text(encoding="utf-8"),
-                predicted_tier=task["tier"],
-                predicted_features=task.get("features"),
-                source="km0",
-            )
-            for task in sorted(tasks, key=lambda task: task["seq"])
-        ]
-
-    package = json.loads(path.read_text(encoding="utf-8"))
-    return [
-        RunTask(
-            task_id=pad(task["seq"]),
-            title=task["title"],
-            prompt=task["prompt"],
-            predicted_tier=task["tier"],
-            predicted_features=task.get("features"),
-            source="km0",
-        )
-        for task in sorted(package["tasks"], key=lambda task: task["seq"])
+    path = Path(path).resolve()
+    if path.is_file():
+        return _from_package_json(path)
+    manifest = find_manifest(path)
+    root = manifest.parent
+    base = root.parent
+    meta = json.loads((root / "manifest.json").read_text(encoding="utf-8")) if (root / "manifest.json").is_file() else {}
+    tasks = [
+        _task(entry, (base / entry["prompt"]).read_text(encoding="utf-8"))
+        for entry in json.loads(manifest.read_text(encoding="utf-8"))
     ]
+    return Package(root=root, project_id=meta.get("projectId"), title=meta.get("title", ""), tasks=_sorted(tasks))
 
 
-def unpack_km0_package(path: str | Path, repo: str | Path) -> None:
-    """Write a package JSON's files into a repository, as KM0's own export does."""
-    package = json.loads(Path(path).read_text(encoding="utf-8"))
+def _from_package_json(path: Path) -> Package:
+    """KM0's `HandoffPackage` JSON: unpack its files next to it, then read them like a folder."""
+    package = json.loads(path.read_text(encoding="utf-8"))
+    base = path.parent / f"{path.stem}-unpacked"
     for file in package["files"]:
-        target = Path(repo) / file["path"]
+        target = base / file["path"]
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(file["content"], encoding="utf-8")
+    loaded = load_km0_package(base)
+    if loaded.project_id is None:
+        loaded.project_id = package.get("projectId")
+    return loaded
+
+
+def _task(entry: dict[str, Any], prompt: str) -> RunTask:
+    return RunTask(
+        task_id=pad(entry["seq"]),
+        title=entry.get("title", ""),
+        goal=entry.get("goal", ""),
+        prompt=prompt,
+        predicted_tier=entry.get("tier"),
+        predicted_features=entry.get("features"),
+        predicted_score=entry.get("score"),
+        depends_on=[pad(seq) for seq in entry.get("dependsOn", [])],
+        acceptance=entry.get("acceptance", []),
+        test_command=entry.get("testCommand") or None,
+    )
+
+
+def _sorted(tasks: list[RunTask]) -> list[RunTask]:
+    return sorted(tasks, key=lambda task: task.task_id)
 
 
 def read_rows(path: str | Path) -> list[dict[str, Any]]:

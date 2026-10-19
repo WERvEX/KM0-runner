@@ -40,7 +40,11 @@ class Summary(BaseModel):
 def load_reports(paths: list[str | Path]) -> list[ExecutionReport]:
     files: list[Path] = []
     for path in map(Path, paths):
-        files.extend(sorted(path.glob("*/report.json")) if path.is_dir() else [path])
+        if path.is_dir():
+            # A run directory (reports/NN.json), or a folder of them.
+            files.extend(sorted(path.glob("reports/*.json")) or sorted(path.glob("*/reports/*.json")))
+        else:
+            files.append(path)
     return [ExecutionReport.model_validate_json(file.read_text(encoding="utf-8")) for file in files]
 
 
@@ -50,7 +54,9 @@ def summarize(reports: list[ExecutionReport], name: str = "") -> Summary:
     confusion = {tier: {column: 0 for column in (*TIERS, "unsolved")} for tier in TIERS}
     for report in judged:
         if report.predicted_tier:
-            confusion[report.predicted_tier][report.solved_tier or "unsolved"] += 1
+            row = confusion.setdefault(report.predicted_tier, {})
+            column = report.solved_tier or "unsolved"
+            row[column] = row.get(column, 0) + 1
     solve_rates, costs = task_means(reports)
     count = len(reports) or 1
     return Summary(

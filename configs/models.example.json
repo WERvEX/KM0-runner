@@ -1,0 +1,14 @@
+{
+  "providers": {
+    "relay": {
+      "baseUrl": "https://YOUR-RELAY.example.com/v1",
+      "api": "openai-completions",
+      "apiKey": "$RELAY_API_KEY",
+      "models": [
+        { "id": "CHEAP-MODEL", "cost": { "input": 0.25, "output": 2, "cacheRead": 0.025, "cacheWrite": 0 } },
+        { "id": "MID-MODEL", "cost": { "input": 1, "output": 8, "cacheRead": 0.1, "cacheWrite": 0 } },
+        { "id": "STRONG-MODEL", "cost": { "input": 5, "output": 25, "cacheRead": 0.5, "cacheWrite": 0 } }
+      ]
+    }
+  }
+}

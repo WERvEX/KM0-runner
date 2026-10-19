@@ -1,39 +1,36 @@
 import json
 
-from km0_runner.handoff import load_km0_package, load_swebench_instances, unpack_km0_package
+from km0_runner.handoff import load_km0_package, load_swebench_instances
 from km0_runner.report import ExecutionReport, TestResult
 from km0_runner.summary import summarize
 
+TASKS = [
+    {"seq": 2, "title": "B", "tier": "T2", "prompt": "km0/tasks/02.md", "dependsOn": [1], "acceptance": ["b"],
+     "features": {"risks": ["security"]}, "score": 4, "testCommand": "pytest -q"},
+    {"seq": 1, "title": "A", "tier": "T1", "prompt": "km0/tasks/01.md"},
+]
 PACKAGE = {
     "projectId": 1,
-    "createdAt": "2026-10-19T00:00:00Z",
-    "root": "km0",
     "files": [
-        {"path": "km0/tasks.json", "content": json.dumps([
-            {"seq": 2, "title": "B", "tier": "T2", "prompt": "km0/tasks/02.md"},
-            {"seq": 1, "title": "A", "tier": "T1", "prompt": "km0/tasks/01.md"},
-        ])},
+        {"path": "km0/tasks.json", "content": json.dumps(TASKS)},
         {"path": "km0/tasks/01.md", "content": "do A"},
         {"path": "km0/tasks/02.md", "content": "do B"},
     ],
-    "tasks": [
-        {"taskId": 11, "seq": 1, "title": "A", "tier": "T1", "agent": "generic", "model": None,
-         "promptPath": "km0/tasks/01.md", "prompt": "do A", "command": None},
-        {"taskId": 12, "seq": 2, "title": "B", "tier": "T2", "agent": "generic", "model": None,
-         "promptPath": "km0/tasks/02.md", "prompt": "do B", "command": None},
-    ],
-    "agents": [],
+    "tasks": [],
 }
 
 
-def test_package_json_and_unpacked_repo_agree(tmp_path):
+def test_package_json_and_folder_agree(tmp_path):
     path = tmp_path / "package.json"
     path.write_text(json.dumps(PACKAGE))
-    unpack_km0_package(path, tmp_path / "repo")
     from_json = load_km0_package(path)
-    from_repo = load_km0_package(tmp_path / "repo")
-    assert [(t.task_id, t.predicted_tier, t.prompt) for t in from_json] == [("01", "T1", "do A"), ("02", "T2", "do B")]
-    assert [t.model_dump() for t in from_json] == [t.model_dump() for t in from_repo]
+    assert from_json.project_id == 1
+    assert [(t.task_id, t.predicted_tier, t.prompt) for t in from_json.tasks] == [("01", "T1", "do A"), ("02", "T2", "do B")]
+    b = from_json.tasks[1]
+    assert b.depends_on == ["01"] and b.acceptance == ["b"] and b.test_command == "pytest -q" and b.risky
+    assert b.predicted_score == 4
+    for folder in (from_json.root, from_json.root.parent):  # km0/ itself, or the folder holding it
+        assert [t.model_dump() for t in load_km0_package(folder).tasks] == [t.model_dump() for t in from_json.tasks]
 
 
 def test_swebench_instances(tmp_path):
@@ -45,7 +42,7 @@ def test_swebench_instances(tmp_path):
 
 def report(task_id, predicted, solved, cost):
     return ExecutionReport(
-        task_id=task_id, source="swebench", predicted_tier=predicted, start_tier=predicted, solved_tier=solved,
+        run_id="r", task_id=task_id, source="swebench", predicted_tier=predicted, start_tier=predicted, solved_tier=solved,
         cost=cost, steps=10, wall_time=1.0, failure_category=None if solved else "tests_failed",
         test_result=TestResult(passed=bool(solved), judge="swebench"), handoff="discard",
         config_hash="abc", runner_version="0.1.0",

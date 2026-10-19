@@ -1,266 +1,273 @@
-"""The cascade: start on the predicted tier, escalate on signals or failed tests, hand off, report."""
+"""The cascade for one task: start on a tier, watch pi's tool events, escalate, hand off, check, report."""
 
 from __future__ import annotations
 
-import copy
 import json
-import logging
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-
-from minisweagent import Environment, Model
-from minisweagent.config import get_config_from_spec
-from minisweagent.environments import get_environment
-from minisweagent.models import get_model
-from minisweagent.utils.serialize import recursive_merge
+from typing import Any
 
 from . import __version__
-from .agent import ESCALATE, WatchedAgent
 from .handoff import RunTask
-from .judge import Judge, NoJudge
-from .report import Attempt, Escalation, ExecutionReport, FailureCategory, TestResult
-from .signals import SignalMonitor
-from .tiers import RunnerConfig, Tier, TierModel
+from .judge import run_test_command
+from .pi_client import PiClient, PiError, tool_text
+from .report import Attempt, Escalation, ExecutionReport, FailureCategory, StopReason, TestResult, Tokens
+from .signals import Signal, SignalMonitor
+from .tiers import RunnerConfig, Rung, Tier
+from .workspace import Workspace, Workspaces
 
-logger = logging.getLogger("km0_runner")
+RUNNER_NOTE = """
 
-EnvFactory = Callable[[RunTask, dict], Environment]
-"""Builds the task's environment from the merged `environment` config section."""
-ModelFactory = Callable[[TierModel, dict], Model]
-"""Builds a tier's model from its rung and the agent config's `model` section."""
+---
+Notes from the runner executing this task:
+- Work only inside the current directory, which is a dedicated checkout for this task.
+- Do not commit, push, or switch branches; the runner commits your changes when you finish.
+{test_line}- When the work is done, stop and summarise what you changed."""
+TEST_LINE = "- Before you finish, run `{command}` and make it pass.\n"
 
-PATCH_COMMAND = "git add -A -- . ':!**/__pycache__/**' ':!*.pyc' && git diff --cached"
+HANDOFF_NOTE = """A previous attempt at this task, on another model, was stopped: {detail}.
+Its changes are still in the working tree. Start with `git diff` to see them, keep what is right, fix what is not, and finish the task.
+Changed files so far:
+{diffstat}"""
 
-HANDOFF_NOTE = """\
-<handoff>
-A cheaper model already worked on this task and was stopped ({reason}).
-The repository is in the state it left: its changes may be partial or wrong.
-Run `git status` and `git diff` to see them, then keep, fix or revert them as needed.
-</handoff>"""
-
-TRAJECTORY_NOTE = """\
-<handoff>
-A cheaper model already worked on this task and was stopped ({reason}).
-The repository is in the state it left. Its full transcript follows.
-<transcript>
-{transcript}
-</transcript>
-</handoff>"""
+PiFactory = Callable[[Rung, Path, Path], PiClient]
+"""Starts pi on a rung in a workspace, logging stderr to the given file."""
+Check = Callable[[RunTask, Workspace], TestResult]
 
 
-def default_env_factory(task: RunTask, environment: dict) -> Environment:
-    if task.source == "swebench":
-        from minisweagent.run.benchmarks.swebench import get_sb_environment
-
-        return get_sb_environment({"environment": environment}, task.instance or {})
-    return get_environment(environment, default_type="local")
+def runner_prompt() -> str:
+    """The Runner's fixed prompt text, hashed into `config_hash`."""
+    return RUNNER_NOTE + TEST_LINE + HANDOFF_NOTE
 
 
-def default_model_factory(rung: TierModel, model_section: dict) -> Model:
-    config = recursive_merge(
-        model_section,
-        {"model_name": rung.model_name, "model_kwargs": rung.model_kwargs},
-        {"model_class": rung.model_class} if rung.model_class else {},
-    )
-    return get_model(config=config)
+def task_message(task: RunTask, test_command: str | None) -> str:
+    test_line = TEST_LINE.format(command=test_command) if test_command else ""
+    return task.prompt + RUNNER_NOTE.format(test_line=test_line)
 
 
-def transcript(messages: list[dict], limit: int) -> str:
-    """The lower tier's conversation after the system and task messages, newest kept when cut."""
-    lines = []
-    for message in messages[2:]:
-        content = message.get("content")
-        if isinstance(content, list):
-            content = "\n".join(part.get("text", "") for part in content if isinstance(part, dict))
-        lines.append(f"[{message.get('role')}]\n{content or ''}")
-    text = "\n\n".join(lines)
-    return text if len(text) <= limit else "…(earlier steps cut)\n" + text[-limit:]
+@dataclass
+class _Watch:
+    """Per-attempt state the event handler updates."""
+
+    rung: Rung
+    monitor: SignalMonitor
+    events: Any
+    cost: float = 0.0
+    signal: Signal | None = None
+    pending: dict[str, dict[str, Any]] | None = None
+
+    def handle(self, event: dict[str, Any]) -> StopReason | None:
+        kind = event.get("type")
+        if kind != "message_update":
+            self.events.write(json.dumps(event, ensure_ascii=False) + "\n")
+        if kind == "tool_execution_start":
+            self.pending = self.pending or {}
+            self.pending[event.get("toolCallId", "")] = event.get("args") or {}
+            self.signal = self.monitor.tool_start(event.get("toolName", ""), event.get("args") or {})
+        elif kind == "tool_execution_end":
+            args = (self.pending or {}).pop(event.get("toolCallId", ""), {})
+            output = tool_text(event.get("result"))
+            self.signal = self.monitor.tool_end(event.get("toolName", ""), args, bool(event.get("isError")), output)
+        elif kind == "message_end" and (event.get("message") or {}).get("role") == "assistant":
+            usage = (event["message"].get("usage") or {}).get("cost") or {}
+            self.cost += float(usage.get("total") or 0)
+        elif kind == "turn_end":
+            self.monitor.turn()
+            if self.cost >= self.rung.cost_limit:
+                self.signal = Signal("cost_budget", f"spent ${self.cost:.4f} of ${self.rung.cost_limit}", self.monitor.steps)
+            elif self.monitor.steps >= self.rung.step_limit:
+                self.signal = Signal("step_budget", f"used {self.monitor.steps} of {self.rung.step_limit} turns", self.monitor.steps)
+        if self.signal is None:
+            return None
+        if self.signal.name in ("step_budget", "cost_budget"):
+            return self.signal.name  # type: ignore[return-value]
+        return "signal"
+
+
+def _tokens(stats: dict[str, Any]) -> Tokens:
+    raw = stats.get("tokens") or {}
+    return Tokens(
+        input=raw.get("input", 0), output=raw.get("output", 0),
+        cache_read=raw.get("cacheRead", 0), cache_write=raw.get("cacheWrite", 0),
+    )  # fmt: skip
+
+
+def _minus(after: Tokens, before: Tokens) -> Tokens:
+    return Tokens(**{name: getattr(after, name) - getattr(before, name) for name in Tokens.model_fields})
 
 
 class Cascade:
     def __init__(
         self,
         config: RunnerConfig,
-        out_dir: str | Path,
-        judge: Judge | None = None,
-        env_factory: EnvFactory = default_env_factory,
-        model_factory: ModelFactory = default_model_factory,
-        patch_command: str = PATCH_COMMAND,
+        run_dir: str | Path,
+        run_id: str,
+        workspaces: Workspaces,
+        pi_factory: PiFactory,
+        pi_version: str | None,
+        check: Check | None = None,
+        project_id: int | str | None = None,
     ):
         self.config = config
-        self.out_dir = Path(out_dir)
-        self.judge = judge or NoJudge()
-        self.env_factory = env_factory
-        self.model_factory = model_factory
-        self.patch_command = patch_command
-        self.base = get_config_from_spec(config.agent_config)
+        self.run_dir = Path(run_dir)
+        self.run_id = run_id
+        self.workspaces = workspaces
+        self.pi_factory = pi_factory
+        self.pi_version = pi_version
+        self.check = check or self._test_command
+        self.project_id = project_id
+        self.config_hash = config.hash(pi_version, runner_prompt())
 
-    def run(self, task: RunTask, start_tier: Tier | None = None, run_index: int = 0) -> ExecutionReport:
-        config = self.config
-        tier = config.start_tier(start_tier or task.predicted_tier or "T1")
-        task_dir = self.out_dir / (task.task_id if run_index == 0 else f"{task.task_id}.r{run_index}")
-        task_dir.mkdir(parents=True, exist_ok=True)
-        steps_log = (task_dir / "steps.jsonl").open("w", encoding="utf-8")
+    def test_command(self, task: RunTask) -> str | None:
+        return task.test_command or self.config.test_command
 
-        attempts: list[Attempt] = []
-        escalations: list[Escalation] = []
-        solved: Tier | None = None
-        failure: FailureCategory | None = None
-        note = ""
-        started = time.time()
-        env = self.env_factory(task, recursive_merge(self.base.get("environment", {}), config.environment))
-        patch = ""
-        try:
-            while True:
-                attempt, agent = self._attempt(task, tier, env, note, len(attempts) + 1, task_dir, steps_log)
-                patch = self._patch(env)
-                if attempt.exit_status == "Submitted":
-                    attempt.test_result = self.judge.judge(task, env, patch)
-                attempts.append(attempt)
+    def _test_command(self, task: RunTask, workspace: Workspace) -> TestResult:
+        return run_test_command(
+            self.test_command(task), workspace.path, self.config.test_timeout,
+            self.config.docker_image if self.config.isolation == "docker" else None,
+        )  # fmt: skip
 
-                passed = attempt.test_result.passed if attempt.test_result else None
-                if attempt.exit_status == "Submitted" and passed is not False:
-                    # An unjudged submission ends the cascade too; solved_tier stays empty without a verdict.
-                    solved = tier if passed else None
-                    break
-                reason = self._reason(attempt)
-                upper = config.above(tier)
-                if attempt.exit_status == "Submitted" and not config.signals.escalate_on_failed_submit:
-                    upper = None
-                if upper is None:
-                    failure = self._failure(attempt)
-                    break
-                escalations.append(
-                    Escalation(
-                        from_tier=tier,
-                        to_tier=upper,
-                        step=attempt.steps,
-                        signal=attempt.signal or reason,
-                        detail=self._detail(attempt, agent),
-                    )
-                )
-                note = self._handoff(env, agent, reason)
-                tier = upper
-        except Exception as error:  # an environment or API failure ends the task, not the batch
-            logger.exception("task %s crashed", task.task_id)
-            failure = "error"
-            crash = f"{type(error).__name__}: {error}"
-            attempts.append(
-                Attempt(
-                    tier=tier, model=config.tier(tier).model_name, exit_status="Error", signal=None,
-                    steps=0, cost=0.0, wall_time=0.0,
-                    test_result=TestResult(passed=None, judge="none", detail=crash),
-                    trajectory=None,
-                )
-            )  # fmt: skip
-        finally:
-            steps_log.close()
-            if hasattr(env, "cleanup"):
-                env.cleanup()
+    def blocked(self, task: RunTask, reason: str) -> ExecutionReport:
+        return self._report(task, start=None, explored=False, failure="blocked", detail=reason)
 
-        final = attempts[-1].test_result if attempts else None
-        report = ExecutionReport(
+    def _report(self, task: RunTask, start: Tier | None, explored: bool, **fields: Any) -> ExecutionReport:
+        failure = fields.pop("failure", None)
+        detail = fields.pop("detail", "")
+        return ExecutionReport(
+            run_id=self.run_id,
+            project_id=self.project_id,
             task_id=task.task_id,
             source=task.source,
             title=task.title,
             predicted_tier=task.predicted_tier,
             predicted_features=task.predicted_features,
-            start_tier=attempts[0].tier if attempts else tier,
+            predicted_score=task.predicted_score,
+            start_tier=start,
+            explored=explored,
+            solved_tier=fields.pop("solved_tier", None),
+            failure_category=failure,
+            failure_detail=detail,
+            handoff=self.config.handoff,
+            test_command=self.test_command(task),
+            depends_on=task.depends_on,
+            acceptance=task.acceptance,
+            config_hash=self.config_hash,
+            runner_version=__version__,
+            pi_version=self.pi_version,
+            **fields,
+        )
+
+    def run(self, task: RunTask, workspace: Workspace, start: Tier, explored: bool = False, run_index: int = 0) -> ExecutionReport:
+        events_dir = self.run_dir / "events"
+        events_dir.mkdir(parents=True, exist_ok=True)
+        attempts: list[Attempt] = []
+        escalations: list[Escalation] = []
+        tier: Tier = start
+        pi: PiClient | None = None
+        note: str | None = None
+        solved: Tier | None = None
+        last_test: TestResult | None = None
+        failure: FailureCategory | None = None
+        detail = ""
+        started = time.monotonic()
+        prefix = task.task_id if run_index == 0 else f"{task.task_id}.r{run_index}"
+        try:
+            while True:
+                rung = self.config.rung(tier)
+                index = len(attempts) + 1
+                if pi is None:
+                    pi = self.pi_factory(rung, workspace.path, self.run_dir / "logs" / f"{prefix}-pi.log")
+                    message = task_message(task, self.test_command(task))
+                elif self.config.handoff == "continue":
+                    pi.set_model(rung)
+                    message = note or ""
+                else:
+                    if self.config.handoff == "restart":
+                        self.workspaces.reset(workspace)
+                    pi.new_session()
+                    pi.set_model(rung)
+                    message = task_message(task, self.test_command(task))
+                    if self.config.handoff == "discard" and note:
+                        message = f"{message}\n\n---\n{note}"
+                before = pi.stats()
+                path = events_dir / f"{prefix}-attempt-{index}-{tier}.jsonl"
+                with path.open("w", encoding="utf-8") as events:
+                    watch = _Watch(rung, SignalMonitor(self.config.signals), events)
+                    attempt_start = time.monotonic()
+                    outcome = pi.run(message, watch.handle, timeout=self.config.pi.turn_timeout)
+                after = pi.stats()
+                stop: StopReason = outcome.stop or ("error" if outcome.error else "settled")
+                attempt = Attempt(
+                    tier=tier,
+                    model=rung.model,
+                    steps=watch.monitor.steps,
+                    tokens=_minus(_tokens(after), _tokens(before)),
+                    cost=round(float(after.get("cost") or 0) - float(before.get("cost") or 0), 6),
+                    wall_time=round(time.monotonic() - attempt_start, 2),
+                    stop_reason=stop,
+                    signal=watch.signal.name if watch.signal else None,
+                    events=str(path.relative_to(self.run_dir)),
+                )
+                attempts.append(attempt)
+                if stop == "error" or stop == "timeout":
+                    failure, detail = "error", outcome.error or "pi run timed out"
+                    break
+                signal = watch.signal
+                if stop == "settled":
+                    last_test = attempt.test_result = self.check(task, workspace)
+                    if last_test.passed is not False:
+                        solved = tier if last_test.passed else None
+                        break
+                    signal = Signal("tests_failed", last_test.detail.splitlines()[0], watch.monitor.steps)
+                assert signal is not None
+                upper = self.config.above(tier)
+                if upper is None:
+                    failure = (
+                        "tests_failed" if signal.name == "tests_failed"
+                        else "budget_exhausted" if signal.name in ("step_budget", "cost_budget")
+                        else "signal_on_top_tier"
+                    )  # fmt: skip
+                    detail = signal.detail
+                    if last_test is None:
+                        last_test = self.check(task, workspace)
+                    break
+                escalations.append(Escalation(from_tier=tier, to_tier=upper, step=signal.step, signal=signal.name, detail=signal.detail))
+                note = HANDOFF_NOTE.format(detail=signal.detail, diffstat=self.workspaces.working_diff(workspace) or "(none)")
+                tier = upper
+        except PiError as error:
+            failure, detail = "error", str(error)
+        finally:
+            if pi is not None:
+                pi.close()
+
+        commit = self.workspaces.commit(workspace, f"KM0 task {task.task_id}: {task.title}".strip())
+        diff_path = None
+        if commit:
+            diff_path = self.run_dir / "diffs" / f"{prefix}.diff"
+            diff_path.parent.mkdir(parents=True, exist_ok=True)
+            diff_path.write_text(self.workspaces.diff(workspace, commit), encoding="utf-8")
+        total = Tokens()
+        for attempt in attempts:
+            total = total + attempt.tokens
+        return self._report(
+            task,
+            start=start,
+            explored=explored,
             solved_tier=solved,
             escalations=escalations,
-            cost=sum(a.cost for a in attempts),
+            cost=round(sum(a.cost for a in attempts), 6),
             steps=sum(a.steps for a in attempts),
-            wall_time=round(time.time() - started, 2),
-            test_result=final,
-            failure_category=failure,
-            handoff=config.handoff,
-            config_hash=config.hash(),
-            runner_version=__version__,
+            tokens=total,
+            wall_time=round(time.monotonic() - started, 2),
+            test_result=last_test,
+            failure=failure,
+            detail=detail,
+            branch=workspace.branch,
+            base_commit=workspace.base_commit,
+            commit=commit,
+            diff=str(diff_path.relative_to(self.run_dir)) if diff_path else None,
             run_index=run_index,
             attempts=attempts,
-            patch=patch,
         )
-        (task_dir / "report.json").write_text(report.model_dump_json(indent=2), encoding="utf-8")
-        return report
-
-    def _attempt(self, task, tier, env, note, number, task_dir, steps_log):
-        rung = self.config.tier(tier)
-        monitor = SignalMonitor(self.config.signals, step_limit=rung.step_limit)
-        model = self.model_factory(rung, copy.deepcopy(self.base.get("model", {})))
-        trajectory = task_dir / f"attempt-{number}-{tier}.traj.json"
-        agent_section = recursive_merge(
-            self.base.get("agent", {}), {"step_limit": 0, "cost_limit": rung.cost_limit, "output_path": trajectory}
-        )
-        agent = WatchedAgent(model, env, monitor=monitor, **agent_section)
-        original = monitor.observe
-
-        def logged(command: str, returncode: int | None, output: str = ""):
-            signal = original(command, returncode, output)
-            record = {"attempt": number, "tier": tier, "step": monitor.steps, "command": command}
-            record |= {"returncode": returncode, "signal": signal.name if signal else None}
-            steps_log.write(json.dumps(record, ensure_ascii=False) + "\n")
-            steps_log.flush()
-            return signal
-
-        monitor.observe = logged  # type: ignore[method-assign]
-        prompt = f"{task.prompt}\n\n{note}" if note else task.prompt
-        started = time.time()
-        result = agent.run(prompt)
-        exit_status = result.get("exit_status", "")
-        signal = agent.signal.name if agent.signal else None
-        if exit_status == "LimitsExceeded":
-            signal = "cost_budget"
-        return (
-            Attempt(
-                tier=tier,
-                model=rung.model_name,
-                exit_status=exit_status,
-                signal=signal,
-                steps=agent.n_calls,
-                cost=round(agent.cost, 6),
-                wall_time=round(time.time() - started, 2),
-                test_result=None,
-                trajectory=str(trajectory.relative_to(self.out_dir)),
-            ),
-            agent,
-        )
-
-    def _patch(self, env: Environment) -> str:
-        try:
-            return env.execute({"command": self.patch_command}).get("output", "")
-        except Exception:  # an agent may have left the repository unusable
-            return ""
-
-    def _reason(self, attempt: Attempt) -> str:
-        if attempt.signal:
-            return attempt.signal
-        if attempt.exit_status == "Submitted":
-            return "failed_submit"
-        return attempt.exit_status or "no_submission"
-
-    def _detail(self, attempt: Attempt, agent: WatchedAgent) -> str:
-        if agent.signal:
-            return agent.signal.detail
-        if attempt.test_result and attempt.test_result.detail:
-            return attempt.test_result.detail[:500]
-        return attempt.exit_status
-
-    def _failure(self, attempt: Attempt) -> FailureCategory:
-        if attempt.exit_status == "Submitted":
-            return "tests_failed"
-        if attempt.signal in ("step_budget", "cost_budget"):
-            return "budget_exhausted"
-        if attempt.signal:
-            return "signal_on_top_tier"
-        return "no_submission"
-
-    def _handoff(self, env: Environment, agent: WatchedAgent, reason: str) -> str:
-        mode = self.config.handoff
-        if mode == "restart":
-            env.execute({"command": self.config.reset_command})
-            return ""
-        if mode == "full":
-            text = transcript(agent.messages, self.config.trajectory_note_chars)
-            return TRAJECTORY_NOTE.format(reason=reason, transcript=text)
-        return HANDOFF_NOTE.format(reason=reason)

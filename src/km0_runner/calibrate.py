@@ -1,4 +1,5 @@
-"""Calibrate KM0's routing rules against execution reports: predicted tier vs the tier that solved the task.
+"""Calibrate KM0's routing rules against execution reports: predicted tier vs the cheapest
+tier KM0 accepted the work on.
 
 The objective is the expected cost of the cascade under the rules, from measured per-tier costs: a task
 started on tier p that needs tier a pays for every tier from p up to a; started above a, it pays for p
@@ -15,6 +16,7 @@ from collections import defaultdict
 
 from pydantic import BaseModel
 
+from .acceptance import Verdict
 from .report import ExecutionReport
 from .scoring import RoutingRules, TaskFeatures, decide_tier
 from .tiers import TIERS, Tier
@@ -27,7 +29,9 @@ class Sample(BaseModel):
     task_id: str
     features: TaskFeatures
     needed: Tier | None
-    """Tier that solved it; None when no tier did."""
+    """Cheapest tier the work was accepted on; None when no tier was."""
+    censored: bool = False
+    """No tier below `needed` was tried, so `needed` is only an upper bound. Exploration exists to shrink these."""
 
 
 class Evaluation(BaseModel):
@@ -38,6 +42,8 @@ class Evaluation(BaseModel):
     over: int
     """Predicted above it: paid a stronger model than needed."""
     expected_cost: float
+    censored: int = 0
+    """Samples whose label is only an upper bound."""
     confusion: dict[str, dict[str, int]]
 
 
@@ -50,25 +56,46 @@ class Calibration(BaseModel):
     test_after: Evaluation | None = None
 
 
-def samples(reports: list[ExecutionReport]) -> list[Sample]:
-    """Judged reports that carry KM0's features and started on T1; others cannot be replayed.
+def samples(reports: list[ExecutionReport], verdicts: dict[tuple[str, str], Verdict] | None = None) -> list[Sample]:
+    """One sample per KM0 task, from every run of it (a rejected task comes back one tier up in a later run).
 
-    A cascade that started higher never tried the tiers below its start, so its solved tier only bounds
-    the needed tier from above. Run calibration data with `--start-tier T1`.
+    Evidence per tier: an attempt that escalated, failed its tests, or was rejected by KM0 says the task needs
+    more; KM0's acceptance (else, without a verdict, a passing test run) says the tier suffices. The label is
+    the cheapest sufficient tier. Tiers outside KM0's T1–T3 cannot be replayed and are ignored.
     """
-    out = []
+    verdicts = verdicts or {}
+    groups: dict[tuple, list[ExecutionReport]] = defaultdict(list)
     for report in reports:
-        if report.predicted_features is None or not report.test_result or report.test_result.passed is None:
+        if report.predicted_features is None or report.start_tier is None:
             continue
-        if report.start_tier != "T1":
-            continue
-        out.append(
-            Sample(
-                task_id=report.task_id,
-                features=TaskFeatures.model_validate(report.predicted_features),
-                needed=report.solved_tier,
-            )
-        )
+        groups[(report.project_id, report.task_id)].append(report)
+    out = []
+    for (_, task_id), runs in groups.items():
+        failed: set[str] = set()
+        enough: set[str] = set()
+        for report in runs:
+            for attempt in report.attempts[:-1]:
+                failed.add(attempt.tier)
+            if not report.attempts:
+                continue
+            final = report.attempts[-1].tier
+            verdict = verdicts.get((report.run_id, report.task_id))
+            if verdict is not None:
+                (enough if verdict.final else failed).add(final)
+            elif report.test_result and report.test_result.passed is not None:
+                (enough if report.solved_tier else failed).add(final)
+        enough &= set(TIERS)
+        failed &= set(TIERS)
+        if enough:
+            needed = min(enough, key=TIERS.index)
+            below = TIERS[: TIERS.index(needed)]
+            censored = not all(tier in failed for tier in below)
+        elif TIERS[-1] in failed:
+            needed, censored = None, False
+        else:
+            continue  # nothing judged yet
+        features = TaskFeatures.model_validate(runs[0].predicted_features)
+        out.append(Sample(task_id=task_id, features=features, needed=needed, censored=censored))
     return out
 
 
@@ -108,6 +135,7 @@ def evaluate(rules: RoutingRules, data: list[Sample], costs: dict[str, float]) -
         under=under,
         over=over,
         expected_cost=round(total / n, 6),
+        censored=sum(1 for sample in data if sample.censored),
         confusion=confusion,
     )
 
@@ -143,12 +171,15 @@ def fit(data: list[Sample], costs: dict[str, float], start: RoutingRules | None 
 
 
 def calibrate(
-    dev: list[ExecutionReport], test: list[ExecutionReport] | None = None, start: RoutingRules | None = None
+    dev: list[ExecutionReport],
+    test: list[ExecutionReport] | None = None,
+    start: RoutingRules | None = None,
+    verdicts: dict[tuple[str, str], Verdict] | None = None,
 ) -> Calibration:
     costs = tier_costs(dev + (test or []))
-    dev_data = samples(dev)
+    dev_data = samples(dev, verdicts)
     if not dev_data:
-        raise ValueError("no judged reports with KM0 features in the dev set")
+        raise ValueError("no judged tasks with KM0 features in the dev reports")
     before = start or RoutingRules()
     after = fit(dev_data, costs, before)
     result = Calibration(
@@ -158,7 +189,7 @@ def calibrate(
         dev_after=evaluate(after, dev_data, costs),
     )
     if test:
-        test_data = samples(test)
+        test_data = samples(test, verdicts)
         result.test_before = evaluate(before, test_data, costs)
         result.test_after = evaluate(after, test_data, costs)
     return result
