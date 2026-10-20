@@ -1,0 +1,33 @@
+# KM0 Runner on the Tokeness relay (https://docs.tokeness.ai). pi reads the key from KM0_RELAY_API_KEY;
+# model ids must match the relay's model marketplace exactly. Run km0-runner from the repo root.
+pi:
+  command: [pi]                 # or [npx, -y, "@earendil-works/pi-coding-agent@1.3.0"]
+  version: "1.3.0"              # pinned; counted in config_hash
+  tools: [read, bash, edit, write]
+  models_json: configs/tokeness.models.json
+ladder:                         # ordered from cheapest to strongest; more than three rungs is fine
+  - name: T1
+    model: tokeness/claude-haiku-5-5
+    step_limit: 40              # assistant turns
+    cost_limit: 0.5             # USD
+  - name: T2
+    model: tokeness/claude-sonnet-5-5
+    step_limit: 60
+    cost_limit: 1.5
+  - name: T3
+    model: tokeness/claude-opus-5-5
+    step_limit: 100
+    cost_limit: 4.0
+km0_tiers: {T1: T1, T2: T2, T3: T3}   # KM0 tier → starting rung
+signals:
+  test_fail_streak: 3
+  same_file_edits: 5
+  repeat_command: 3
+  tool_error_streak: 5
+handoff: discard                # discard | continue | restart
+exploration:
+  rate: 0.15                    # share of low-risk tasks started one tier lower, for calibration
+  only_low_risk: true
+  seed: 0
+isolation: worktree             # worktree | docker (needs docker_image with node and pi)
+test_command: null              # used when a task has no testCommand

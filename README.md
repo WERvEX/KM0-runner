@@ -28,6 +28,18 @@ pytest
 Models come from pi. A relay or any OpenAI-compatible endpoint is a provider in pi's `models.json`
 (`configs/models.example.json`); the Runner config names models as `provider/modelId`.
 
+### Tokeness relay
+
+`configs/tokeness.runner.yaml` and `configs/tokeness.models.json` are ready for the
+[Tokeness](https://docs.tokeness.ai) relay. pi talks to it in Anthropic format (`https://n.tokeness.dev`);
+the `tokeness-openai` provider in the same file is the OpenAI-compatible route (`https://n.tokeness.dev/v1`)
+if the first one is refused. The key is never in a file: pi reads it from `KM0_RELAY_API_KEY`.
+
+```bash
+export KM0_RELAY_API_KEY=...                          # or set it as an environment secret
+km0-runner smoke -c configs/tokeness.runner.yaml
+```
+
 ## Run
 
 ```bash
