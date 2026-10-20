@@ -50,6 +50,8 @@ class Tokens(BaseModel):
 
 
 class Attempt(BaseModel):
+    purpose: Literal["task", "merge"] = "task"
+    """`merge`: resolving a conflict between upstream branches before the task started."""
     tier: Tier
     model: str
     steps: int
@@ -100,6 +102,10 @@ class ExecutionReport(BaseModel):
     diff: str | None = None
     """The change as a patch file, relative to the run directory."""
     depends_on: list[str] = Field(default_factory=list)
+    merge_resolved: list[str] = Field(default_factory=list)
+    """Files that conflicted between upstream branches and were resolved before the task started."""
+    merge_diff: str | None = None
+    """How those conflicts were resolved, as a patch file relative to the run directory."""
     acceptance: list[str] = Field(default_factory=list)
     """KM0's acceptance criteria, passed through for KM0's own acceptance."""
     config_hash: str

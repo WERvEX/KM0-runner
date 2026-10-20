@@ -1,15 +1,19 @@
 """Workspaces: one git worktree and branch per task, so pi never touches the user's checkout.
 
 A task without upstream tasks starts from the commit the run started on; a task with upstream tasks starts
-from their branches, merged in order. The Runner commits the task's changes to its branch and removes the
-worktree; it never pushes and never touches the user's branches.
+from their branches, merged in order. When two upstream branches conflict, a resolver (pi, in practice) may fix
+the conflicted files; the Runner then commits the merge and the task starts on top of it. The Runner commits
+the task's changes to its branch and removes the worktree; it never pushes and never touches the user's
+branches.
 """
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .handoff import HANDOFF_ROOT
@@ -27,6 +31,13 @@ class MergeConflict(GitError):
     pass
 
 
+Resolver = Callable[[Path, list[str], str], str | None]
+"""Fixes a conflicted merge in the worktree at `path`: (path, conflicted files, branch being merged in).
+Returns None when the conflict is resolved, otherwise why not."""
+
+MARKER = re.compile(r"^(<<<<<<<|>>>>>>>)( |$)|^=======$", re.MULTILINE)
+
+
 def git(cwd: str | Path, *args: str, check: bool = True) -> str:
     result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
     if check and result.returncode != 0:
@@ -41,6 +52,8 @@ class Workspace:
     branch: str
     base_commit: str
     """Where the task started: the run's start commit, or its upstream branches merged."""
+    resolved: list[str] = field(default_factory=list)
+    """Files whose merge conflict between upstream branches was resolved before the task started."""
 
 
 class Workspaces:
@@ -75,24 +88,55 @@ class Workspaces:
                 found.append(task_id)
         return found
 
-    def create(self, task_id: str, upstream: list[str]) -> Workspace:
-        """A worktree on a new branch; raises `MergeConflict` when the upstream branches do not merge."""
+    def create(self, task_id: str, upstream: list[str], resolve: Resolver | None = None) -> Workspace:
+        """A worktree on a new branch; raises `MergeConflict` when the upstream branches do not merge and
+        `resolve` is missing or fails."""
         path = self.root / task_id
         branch = self.branch(task_id)
         start = self.branch(upstream[0]) if upstream else self.start_commit
         self.root.mkdir(parents=True, exist_ok=True)
         git(self.repo, "worktree", "add", "-q", "-b", branch, str(path), start)
+        resolved: list[str] = []
         for other in upstream[1:]:
             merged = subprocess.run(
                 ["git", *AUTHOR, "merge", "-q", "--no-edit", self.branch(other)], cwd=path, capture_output=True, text=True
             )
-            if merged.returncode != 0:
+            if merged.returncode == 0:
+                continue
+            files = git(path, "diff", "--name-only", "--diff-filter=U", check=False).split()
+            why = resolve(path, files, self.branch(other)) if resolve and files else "no resolver"
+            if why is None:
+                why = self._conclude_merge(path, files, self.branch(other))
+            if why is not None:
                 git(path, "merge", "--abort", check=False)
                 self.discard(Workspace(task_id, path, branch, start))
-                raise MergeConflict(f"merging {self.branch(other)} into {branch} conflicts: {merged.stdout.strip()[-500:]}")
-        workspace = Workspace(task_id, path, branch, git(path, "rev-parse", "HEAD"))
+                raise MergeConflict(
+                    f"merging {self.branch(other)} into {branch} conflicts in {', '.join(files) or '?'}: {why}"
+                )
+            resolved += files
+        workspace = Workspace(task_id, path, branch, git(path, "rev-parse", "HEAD"), resolved)
         self._copy_package(workspace)
         return workspace
+
+    def _conclude_merge(self, path: Path, files: list[str], other: str) -> str | None:
+        """Commit a merge the resolver fixed; why not, when it left the merge unfinished."""
+        if not git(path, "rev-parse", "-q", "--verify", "MERGE_HEAD", check=False):
+            # The resolver may have committed the merge itself, against instructions; that still counts.
+            if git(path, "rev-parse", "-q", "--verify", "HEAD^2", check=False) == git(path, "rev-parse", other):
+                return None
+            return "the merge was aborted during resolution"
+        marked = [f for f in files if (path / f).is_file() and MARKER.search((path / f).read_text(errors="replace"))]
+        if marked:
+            return f"conflict markers left in {', '.join(marked)}"
+        git(path, "add", "-A", "--", ".", *EXCLUDES)
+        if git(path, "diff", "--name-only", "--diff-filter=U", check=False):
+            return "files still unmerged"
+        git(path, *AUTHOR, "commit", "-q", "--no-verify", "--no-edit")
+        return None
+
+    def merge_diff(self, workspace: Workspace) -> str:
+        """How the conflicts were resolved: the merge commit against git's own conflicted merge."""
+        return git(workspace.path, "show", "--remerge-diff", "--format=", workspace.base_commit, check=False)
 
     def _copy_package(self, workspace: Workspace) -> None:
         """Put the package's `km0/` folder in the worktree when the repository does not track it."""

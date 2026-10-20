@@ -91,6 +91,12 @@ Upstream tasks left out of `--tasks` then start from the earlier run's branches.
 6. **Finish.** Commit, write the report and the diff, remove the worktree. A failure on the top tier marks
    the task failed, and tasks that depend on it are `blocked`.
 
+When two upstream branches conflict (parallel tasks that edited the same lines), pi first resolves the
+conflict on the task's start tier, keeping both sides, and the task's test command must pass on the result.
+The Runner commits the merge and the task starts on top of it, so the task's own diff leaves the resolution
+out; `merge_diff` shows how the conflict was resolved. The resolution counts toward the task's cost but
+not toward calibration. If it fails, the task is `blocked`.
+
 ## Output
 
 ```
@@ -98,6 +104,7 @@ runs/<run_id>/
   run.json                      config, hash, pi version, starting commit, task order
   reports/NN.json               execution report per task
   diffs/NN.diff                 the task's change, for KM0's acceptance
+  diffs/NN.merge.diff           how a conflict between upstream branches was resolved, when there was one
   events/NN-attempt-K-T1.jsonl  pi's event stream per attempt
   logs/NN-pi.log                pi's stderr
   summary.json                  cost, tier use, pass rate, and the all-top-tier estimate
@@ -118,8 +125,9 @@ The execution report (`report_version: 2`, `src/km0_runner/report.py`):
 | `failure_category` | `tests_failed`, `budget_exhausted`, `signal_on_top_tier`, `blocked` or `error` |
 | `branch`, `base_commit`, `commit`, `diff` | where the change is |
 | `acceptance`, `depends_on` | KM0's criteria and dependencies, passed through |
+| `merge_resolved`, `merge_diff` | files that conflicted between upstream branches, and how they were resolved |
 | `config_hash`, `pi_version`, `runner_version` | for reproducing a run |
-| `attempts` | per attempt: tier, model, turns, tokens, cost, stop reason, signal, test result, events file |
+| `attempts` | per attempt: purpose (`task`, or `merge` for a conflict resolution), tier, model, turns, tokens, cost, stop reason, signal, test result, events file |
 
 `summary.json` adds the run's total cost, attempts and cost per tier, the pass rate, and an estimate of
 running everything on the top tier: the same tokens priced at the top rung's rates from `models.json`.

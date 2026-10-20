@@ -3,7 +3,7 @@
 The script (JSON, path in FAKE_PI_SCRIPT) maps a model id to a list of runs; each prompt sent while that
 model is selected plays its next run. A run is a list of turns; a turn is {"tools": [{"name", "args"}]} or
 {"text": "..."}. Tools really run in the working directory (bash, write, edit), so tests see real effects.
-Every command received is appended to FAKE_PI_LOG. Each assistant message costs `price[model]` USD.
+Every command received is appended to FAKE_PI_LOG. With "shared": true, runs carry on across pi processes. Each assistant message costs `price[model]` USD.
 """
 
 import json
@@ -105,8 +105,12 @@ def aborted():
 
 def play(prompt_command):
     runs = script["runs"].get(model, [])
-    index = played.get(model, 0)
-    played[model] = index + 1
+    if script.get("shared"):  # runs are consumed across pi processes: count the prompts already logged
+        index = sum(1 for line in log.read_text().splitlines()
+                    if json.loads(line)["type"] == "prompt" and json.loads(line)["model"] == model) - 1
+    else:
+        index = played.get(model, 0)
+        played[model] = index + 1
     turns = runs[index] if index < len(runs) else [{"text": "nothing to do"}]
     respond(prompt_command, {"disposition": "started"})
     emit({"type": "agent_start"})
