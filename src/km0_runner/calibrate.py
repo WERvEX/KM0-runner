@@ -74,11 +74,13 @@ def samples(reports: list[ExecutionReport], verdicts: dict[tuple[str, str], Verd
         failed: set[str] = set()
         enough: set[str] = set()
         for report in runs:
-            for attempt in report.attempts[:-1]:
+            # Resolving a merge conflict before the task says nothing about the tier the task needs.
+            attempts = [attempt for attempt in report.attempts if attempt.purpose == "task"]
+            for attempt in attempts[:-1]:
                 failed.add(attempt.tier)
-            if not report.attempts:
+            if not attempts:
                 continue
-            final = report.attempts[-1].tier
+            final = attempts[-1].tier
             verdict = verdicts.get((report.run_id, report.task_id))
             if verdict is not None:
                 (enough if verdict.final else failed).add(final)
@@ -104,7 +106,8 @@ def tier_costs(reports: list[ExecutionReport], fallback: dict[str, float] | None
     spent: dict[str, list[float]] = defaultdict(list)
     for report in reports:
         for attempt in report.attempts:
-            spent[attempt.tier].append(attempt.cost)
+            if attempt.purpose == "task":
+                spent[attempt.tier].append(attempt.cost)
     costs = {tier: sum(values) / len(values) for tier, values in spent.items() if values}
     defaults = fallback or {"T1": 1.0, "T2": 3.0, "T3": 10.0}
     return {tier: costs.get(tier) or defaults[tier] for tier in TIERS}

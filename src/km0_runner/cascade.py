@@ -12,7 +12,7 @@ from typing import Any
 from . import __version__
 from .handoff import RunTask
 from .judge import run_test_command
-from .pi_client import PiClient, PiError, tool_text
+from .pi_client import PiClient, PiError, RunOutcome, tool_text
 from .report import Attempt, Escalation, ExecutionReport, FailureCategory, StopReason, TestResult, Tokens
 from .signals import Signal, SignalMonitor
 from .tiers import RunnerConfig, Rung, Tier
@@ -32,6 +32,14 @@ Its changes are still in the working tree. Start with `git diff` to see them, ke
 Changed files so far:
 {diffstat}"""
 
+MERGE_NOTE = """This checkout is in the middle of `git merge {branch}`: two earlier tasks, both finished, changed the same lines.
+Conflicted files:
+{files}
+Resolve every conflict so that both sides' changes are kept, remove all conflict markers, and change nothing else.
+Do not run `git merge --abort`, commit, or switch branches; the runner commits the merge.
+{test_line}When done, stop and summarise how you resolved each conflict."""
+MERGE_TEST_LINE = "Afterwards run `{command}` and make it pass without undoing what either side did.\n"
+
 PiFactory = Callable[[Rung, Path, Path], PiClient]
 """Starts pi on a rung in a workspace, logging stderr to the given file."""
 Check = Callable[[RunTask, Workspace], TestResult]
@@ -39,7 +47,7 @@ Check = Callable[[RunTask, Workspace], TestResult]
 
 def runner_prompt() -> str:
     """The Runner's fixed prompt text, hashed into `config_hash`."""
-    return RUNNER_NOTE + TEST_LINE + HANDOFF_NOTE
+    return RUNNER_NOTE + TEST_LINE + HANDOFF_NOTE + MERGE_NOTE + MERGE_TEST_LINE
 
 
 def task_message(task: RunTask, test_command: str | None) -> str:
@@ -129,8 +137,67 @@ class Cascade:
             self.config.docker_image if self.config.isolation == "docker" else None,
         )  # fmt: skip
 
-    def blocked(self, task: RunTask, reason: str) -> ExecutionReport:
-        return self._report(task, start=None, explored=False, failure="blocked", detail=reason)
+    def blocked(self, task: RunTask, reason: str, attempts: list[Attempt] | None = None) -> ExecutionReport:
+        attempts = attempts or []
+        return self._report(
+            task, start=None, explored=False, failure="blocked", detail=reason, attempts=attempts,
+            cost=round(sum(a.cost for a in attempts), 6), steps=sum(a.steps for a in attempts),
+        )  # fmt: skip
+
+    def _attempt(
+        self, pi: PiClient, rung: Rung, message: str, path: Path, purpose: str = "task"
+    ) -> tuple[Attempt, RunOutcome, Signal | None]:
+        """Play one prompt on pi, watching budgets and signals; the attempt, pi's outcome and the signal that fired."""
+        before = pi.stats()
+        with path.open("w", encoding="utf-8") as events:
+            watch = _Watch(rung, SignalMonitor(self.config.signals), events)
+            attempt_start = time.monotonic()
+            outcome = pi.run(message, watch.handle, timeout=self.config.pi.turn_timeout)
+        after = pi.stats()
+        stop: StopReason = outcome.stop or ("error" if outcome.error else "settled")
+        attempt = Attempt(
+            purpose=purpose,  # type: ignore[arg-type]
+            tier=rung.name,
+            model=rung.model,
+            steps=watch.monitor.steps,
+            tokens=_minus(_tokens(after), _tokens(before)),
+            cost=round(float(after.get("cost") or 0) - float(before.get("cost") or 0), 6),
+            wall_time=round(time.monotonic() - attempt_start, 2),
+            stop_reason=stop,
+            signal=watch.signal.name if watch.signal else None,
+            events=str(path.relative_to(self.run_dir)),
+        )
+        return attempt, outcome, watch.signal
+
+    def resolve_merge(
+        self, task: RunTask, tier: Tier, path: Path, files: list[str], branch: str, attempts: list[Attempt]
+    ) -> str | None:
+        """Have pi resolve a conflict between the task's upstream branches, on the task's start tier.
+        Appends its attempt to `attempts`; returns None when resolved, otherwise why not."""
+        rung = self.config.rung(tier)
+        events_dir = self.run_dir / "events"
+        events_dir.mkdir(parents=True, exist_ok=True)
+        command = self.test_command(task)
+        message = MERGE_NOTE.format(
+            branch=branch, files="\n".join(f"- {name}" for name in files),
+            test_line=MERGE_TEST_LINE.format(command=command) if command else "",
+        )  # fmt: skip
+        pi = self.pi_factory(rung, path, self.run_dir / "logs" / f"{task.task_id}-merge-pi.log")
+        try:
+            attempt, outcome, signal = self._attempt(
+                pi, rung, message, events_dir / f"{task.task_id}-merge-{len(attempts) + 1}-{tier}.jsonl", "merge"
+            )
+        except PiError as error:
+            return f"resolving the conflict failed: {error}"
+        finally:
+            pi.close()
+        attempts.append(attempt)
+        if attempt.stop_reason != "settled":
+            return f"resolving the conflict stopped ({attempt.stop_reason}): {outcome.error or (signal.detail if signal else '')}"
+        test = attempt.test_result = self.check(task, Workspace(task.task_id, path, "", ""))
+        if test.passed is False:
+            return f"tests fail after resolving the conflict: {test.detail.splitlines()[0] if test.detail else ''}"
+        return None
 
     def _report(self, task: RunTask, start: Tier | None, explored: bool, **fields: Any) -> ExecutionReport:
         failure = fields.pop("failure", None)
@@ -159,10 +226,13 @@ class Cascade:
             **fields,
         )
 
-    def run(self, task: RunTask, workspace: Workspace, start: Tier, explored: bool = False, run_index: int = 0) -> ExecutionReport:
+    def run(
+        self, task: RunTask, workspace: Workspace, start: Tier, explored: bool = False, run_index: int = 0,
+        merge_attempts: list[Attempt] | None = None,
+    ) -> ExecutionReport:
         events_dir = self.run_dir / "events"
         events_dir.mkdir(parents=True, exist_ok=True)
-        attempts: list[Attempt] = []
+        attempts: list[Attempt] = list(merge_attempts or [])
         escalations: list[Escalation] = []
         tier: Tier = start
         pi: PiClient | None = None
@@ -176,7 +246,7 @@ class Cascade:
         try:
             while True:
                 rung = self.config.rung(tier)
-                index = len(attempts) + 1
+                index = sum(1 for a in attempts if a.purpose == "task") + 1
                 if pi is None:
                     pi = self.pi_factory(rung, workspace.path, self.run_dir / "logs" / f"{prefix}-pi.log")
                     message = task_message(task, self.test_command(task))
@@ -191,36 +261,20 @@ class Cascade:
                     message = task_message(task, self.test_command(task))
                     if self.config.handoff == "discard" and note:
                         message = f"{message}\n\n---\n{note}"
-                before = pi.stats()
                 path = events_dir / f"{prefix}-attempt-{index}-{tier}.jsonl"
-                with path.open("w", encoding="utf-8") as events:
-                    watch = _Watch(rung, SignalMonitor(self.config.signals), events)
-                    attempt_start = time.monotonic()
-                    outcome = pi.run(message, watch.handle, timeout=self.config.pi.turn_timeout)
-                after = pi.stats()
-                stop: StopReason = outcome.stop or ("error" if outcome.error else "settled")
-                attempt = Attempt(
-                    tier=tier,
-                    model=rung.model,
-                    steps=watch.monitor.steps,
-                    tokens=_minus(_tokens(after), _tokens(before)),
-                    cost=round(float(after.get("cost") or 0) - float(before.get("cost") or 0), 6),
-                    wall_time=round(time.monotonic() - attempt_start, 2),
-                    stop_reason=stop,
-                    signal=watch.signal.name if watch.signal else None,
-                    events=str(path.relative_to(self.run_dir)),
-                )
+                attempt, outcome, watch_signal = self._attempt(pi, rung, message, path)
+                stop = attempt.stop_reason
                 attempts.append(attempt)
                 if stop == "error" or stop == "timeout":
                     failure, detail = "error", outcome.error or "pi run timed out"
                     break
-                signal = watch.signal
+                signal = watch_signal
                 if stop == "settled":
                     last_test = attempt.test_result = self.check(task, workspace)
                     if last_test.passed is not False:
                         solved = tier if last_test.passed else None
                         break
-                    signal = Signal("tests_failed", last_test.detail.splitlines()[0], watch.monitor.steps)
+                    signal = Signal("tests_failed", last_test.detail.splitlines()[0], attempt.steps)
                 assert signal is not None
                 upper = self.config.above(tier)
                 if upper is None:
@@ -248,6 +302,11 @@ class Cascade:
             diff_path = self.run_dir / "diffs" / f"{prefix}.diff"
             diff_path.parent.mkdir(parents=True, exist_ok=True)
             diff_path.write_text(self.workspaces.diff(workspace, commit), encoding="utf-8")
+        merge_diff = None
+        if workspace.resolved:
+            merge_diff = self.run_dir / "diffs" / f"{prefix}.merge.diff"
+            merge_diff.parent.mkdir(parents=True, exist_ok=True)
+            merge_diff.write_text(self.workspaces.merge_diff(workspace), encoding="utf-8")
         total = Tokens()
         for attempt in attempts:
             total = total + attempt.tokens
@@ -269,5 +328,7 @@ class Cascade:
             commit=commit,
             diff=str(diff_path.relative_to(self.run_dir)) if diff_path else None,
             run_index=run_index,
+            merge_resolved=workspace.resolved,
+            merge_diff=str(merge_diff.relative_to(self.run_dir)) if merge_diff else None,
             attempts=attempts,
         )

@@ -29,8 +29,8 @@ def write_package(repo, tasks, commit=False):
     return root
 
 
-def run(tmp_path, repo, runs, package=None, **config):
-    fake = FakePi(tmp_path, runs, price={"cheap": 0.01, "mid": 0.05, "strong": 0.2})
+def run(tmp_path, repo, runs, package=None, shared=False, **config):
+    fake = FakePi(tmp_path, runs, price={"cheap": 0.01, "mid": 0.05, "strong": 0.2}, shared=shared)
     package = load_km0_package(package or repo)
     run_dir, reports = run_package(package, repo, ladder(**config), tmp_path / "runs", "r1", pi_factory=fake,
                                    pi_version="1.3.0", log=lambda line: None)
@@ -217,3 +217,37 @@ def test_a_request_pi_gave_up_on_fails_the_task(tmp_path, repo):
 
     assert report.solved_tier is None and report.failure_category == "error"
     assert "timed out" in report.failure_detail
+
+
+def test_conflicting_upstream_branches_are_resolved_before_the_task(tmp_path, repo):
+    # Tasks 1 and 2 run in parallel and rewrite the same line; task 3 needs both.
+    write_package(repo, [{}, {}, {"dependsOn": [1, 2]}], commit=True)
+    resolve = bash("printf 'def add(a, b):\\n    return a + b\\n' > calc.py")
+    runs = {"cheap": [[FIX, done()], [edit("calc.py", "a - b", "b + a"), done()], [resolve, done()],
+                      [bash("touch three.txt"), done()]]}
+    fake, run_dir, [_, two, three] = run(tmp_path, repo, runs, shared=True)
+
+    assert three.solved_tier == "T1" and three.merge_resolved == ["calc.py"]
+    merge, task = three.attempts
+    assert merge.purpose == "merge" and merge.test_result.passed and task.purpose == "task"
+    assert three.cost == pytest.approx(merge.cost + task.cost) and merge.cost > 0
+    # The task's own diff leaves the resolution out; the merge diff shows it.
+    assert "three.txt" in (run_dir / three.diff).read_text() and "calc.py" not in (run_dir / three.diff).read_text()
+    assert "return a + b" in (run_dir / three.merge_diff).read_text()
+    parents = subprocess.run(["git", "rev-list", "--parents", "-n1", three.base_commit], cwd=repo,
+                             capture_output=True, text=True, check=True).stdout.split()
+    assert len(parents) == 3 and two.commit in parents
+    assert "git merge km0/r1/02" in fake.prompts()[2][1]
+
+
+def test_an_unresolved_conflict_blocks_the_task(tmp_path, repo):
+    write_package(repo, [{}, {}, {"dependsOn": [1, 2]}], commit=True)
+    runs = {"cheap": [[FIX, done()], [edit("calc.py", "a - b", "b + a"), done()], [done("gave up")]]}
+    _, _, [_, _, three] = run(tmp_path, repo, runs, shared=True)
+
+    assert three.failure_category == "blocked" and "calc.py" in three.failure_detail
+    assert "markers" in three.failure_detail or "tests fail" in three.failure_detail
+    assert [a.purpose for a in three.attempts] == ["merge"] and three.cost == pytest.approx(0.01)
+    # Nothing is left behind: no branch for the task that never started.
+    assert not subprocess.run(["git", "branch", "--list", "km0/r1/03"], cwd=repo, capture_output=True,
+                              text=True, check=True).stdout.strip()

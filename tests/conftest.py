@@ -37,10 +37,10 @@ def ladder(**overrides) -> RunnerConfig:
 class FakePi:
     """Writes the fake pi's script and starts it like the Runner starts pi."""
 
-    def __init__(self, tmp_path: Path, runs: dict, price: dict | None = None):
+    def __init__(self, tmp_path: Path, runs: dict, price: dict | None = None, shared: bool = False):
         self.script = tmp_path / "script.json"
         self.log = tmp_path / "commands.jsonl"
-        self.script.write_text(json.dumps({"runs": runs, "price": price or {}}))
+        self.script.write_text(json.dumps({"runs": runs, "price": price or {}, "shared": shared}))
 
     def __call__(self, rung, workspace, log):
         argv, _ = pi_argv(PiConfig(command=[sys.executable, str(FAKE_PI)]), rung, workspace, None)

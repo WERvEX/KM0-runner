@@ -163,3 +163,13 @@ def test_evaluate_confusion_counts_unsolved():
     data = samples([report("a", dict(BASE), None)])
     result = evaluate(RoutingRules(), data, {"T1": 1, "T2": 1, "T3": 1})
     assert result.confusion["T1"]["unsolved"] == 1 and result.under == 1
+
+
+def test_a_merge_resolution_is_not_a_failed_tier():
+    feats = dict(BASE)
+    merged = report("a", feats, "T2", start="T2")
+    merge = Attempt(purpose="merge", tier="T1", model="T1", steps=1, cost=5.0, wall_time=1, stop_reason="settled")
+    merged = merged.model_copy(update={"attempts": [merge, *merged.attempts]})
+    # T2 started the task and passed; resolving the conflict on T1 first proves nothing about T1.
+    assert [(s.needed, s.censored) for s in samples([merged])] == [("T2", True)]
+    assert tier_costs([merged])["T1"] == 1.0  # the fallback, not the merge's cost

@@ -21,9 +21,9 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from .cascade import Cascade, PiFactory
-from .handoff import Package
+from .handoff import Package, RunTask
 from .pi_client import PiClient, agent_dir, pi_argv
-from .report import ExecutionReport
+from .report import Attempt, ExecutionReport
 from .scheduler import order, start_tier
 from .tiers import RunnerConfig, Rung, Tier
 from .workspace import MergeConflict, Workspaces
@@ -181,15 +181,24 @@ def run_package(
         if failed_upstream or missing:
             report = cascade.blocked(task, f"upstream tasks failed or did not run: {', '.join(failed_upstream + missing)}")
         else:
+            tier, explored = start_tier(config, task, run_id, start)
+            merge_attempts: list[Attempt] = []
+
+            def resolve(
+                path: Path, files: list[str], branch: str, task: RunTask = task, tier: Tier = tier,
+                attempts: list[Attempt] = merge_attempts,
+            ) -> str | None:
+                log(f"{task.task_id}: upstream branches conflict in {', '.join(files)}; resolving on {tier}")
+                return cascade.resolve_merge(task, tier, path, files, branch, attempts)
+
             try:
-                workspace = workspaces.create(task.task_id, task.depends_on)
+                workspace = workspaces.create(task.task_id, task.depends_on, resolve)
             except MergeConflict as conflict:
-                report = cascade.blocked(task, str(conflict))
+                report = cascade.blocked(task, str(conflict), merge_attempts)
             else:
-                tier, explored = start_tier(config, task, run_id, start)
                 log(f"{task.task_id} {task.title}: starting on {tier}{' (exploring)' if explored else ''}")
                 try:
-                    report = cascade.run(task, workspace, tier, explored)
+                    report = cascade.run(task, workspace, tier, explored, merge_attempts=merge_attempts)
                 finally:
                     workspaces.remove(workspace)
         reports[task.task_id] = report
