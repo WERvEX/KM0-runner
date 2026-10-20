@@ -112,6 +112,17 @@ def play(prompt_command):
     emit({"type": "agent_start"})
     for number, turn in enumerate(turns):
         emit({"type": "turn_start"})
+        if "provider_error" in turn:  # a failed request; pi retries it when `retried` is set
+            message = {"role": "assistant", "content": [], "provider": "fake", "model": model, "stopReason": "error",
+                       "errorMessage": turn["provider_error"]}
+            emit({"type": "message_end", "message": message})
+            emit({"type": "turn_end", "message": message, "toolResults": []})
+            emit({"type": "auto_retry_start", "attempt": 1, "errorMessage": turn["provider_error"]})
+            emit({"type": "auto_retry_end", "success": bool(turn.get("retried")), "attempt": 1,
+                  **({} if turn.get("retried") else {"finalError": turn["provider_error"]})})
+            if turn.get("retried"):
+                continue
+            break
         if "text" in turn:
             message = assistant([{"type": "text", "text": turn["text"]}])
             emit({"type": "turn_end", "message": message, "toolResults": []})
