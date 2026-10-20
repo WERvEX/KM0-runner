@@ -200,3 +200,20 @@ def test_redo_one_task_on_top_of_an_earlier_run(tmp_path, repo):
     _, [blocked] = run_package(load_km0_package(repo), repo, ladder(), tmp_path / "runs", "r3", pi_factory=fake,
                                pi_version="1.3.0", only=["02"], log=lambda line: None)
     assert blocked.failure_category == "blocked"
+
+
+def test_a_request_pi_retried_is_not_an_error(tmp_path, repo):
+    write_package(repo, [{}], commit=True)
+    runs = {"cheap": [[{"provider_error": "Request timed out.", "retried": True}, FIX, done()]]}
+    _, _, [report] = run(tmp_path, repo, runs)
+
+    assert report.solved_tier == "T1" and report.failure_category is None
+
+
+def test_a_request_pi_gave_up_on_fails_the_task(tmp_path, repo):
+    write_package(repo, [{}], commit=True)
+    runs = {"cheap": [[{"provider_error": "Request timed out."}]]}
+    _, _, [report] = run(tmp_path, repo, runs)
+
+    assert report.solved_tier is None and report.failure_category == "error"
+    assert "timed out" in report.failure_detail

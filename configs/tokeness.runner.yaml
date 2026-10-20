@@ -7,7 +7,7 @@ pi:
   models_json: configs/tokeness.models.json
 ladder:                         # ordered from cheapest to strongest; more than three rungs is fine
   - name: T1
-    model: tokeness/claude-haiku-5-5
+    model: tokeness/claude-haiku-4-5
     step_limit: 40              # assistant turns
     cost_limit: 0.5             # USD
   - name: T2

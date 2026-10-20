@@ -238,12 +238,11 @@ class PiClient:
                     return RunOutcome(aborted=True, stop=stop, error="pi did not settle after abort")
                 continue
             kind = event.get("type")
-            if kind == "auto_retry_end" and not event.get("success"):
-                error = event.get("finalError")
-            if kind == "message_end":
-                message_error = _assistant_error(event.get("message") or {})
-                if message_error:
-                    error = message_error
+            if kind == "auto_retry_end":
+                # A request pi retried successfully is not the run's error; one it gave up on is.
+                error = None if event.get("success") else event.get("finalError") or error
+            if kind == "message_end" and (event.get("message") or {}).get("role") == "assistant":
+                error = _assistant_error(event["message"])
             if kind == "agent_settled":
                 return RunOutcome(aborted=bool(event.get("aborted")) or stop is not None, stop=stop, error=error)
             if stop is None:
