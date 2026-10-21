@@ -41,6 +41,10 @@ class PiConfig(BaseModel):
     extra_args: list[str] = Field(default_factory=list)
     turn_timeout: float = 3600
     """Seconds one prompt may run before the Runner aborts it."""
+    provider_retries: int = 3
+    """Times a prompt that ended on a provider error (after pi's own retries) is resumed in the same session."""
+    provider_retry_delay: float = 15
+    """Seconds before the first resume; each later one waits that much longer."""
 
 
 class Rung(BaseModel):

@@ -27,6 +27,9 @@ Notes from the runner executing this task:
 {test_line}- When the work is done, stop and summarise what you changed."""
 TEST_LINE = "- Before you finish, run `{command}` and make it pass.\n"
 
+RESUME_NOTE = """The connection to the model failed and your last reply was lost. Carry on with the task from where you were; \
+check the working tree first if you are unsure what is already done."""
+
 HANDOFF_NOTE = """A previous attempt at this task, on another model, was stopped: {detail}.
 Its changes are still in the working tree. Start with `git diff` to see them, keep what is right, fix what is not, and finish the task.
 Changed files so far:
@@ -243,11 +246,16 @@ class Cascade:
         detail = ""
         started = time.monotonic()
         prefix = task.task_id if run_index == 0 else f"{task.task_id}.r{run_index}"
+        resumes = 0
+        resume = False
         try:
             while True:
                 rung = self.config.rung(tier)
                 index = sum(1 for a in attempts if a.purpose == "task") + 1
-                if pi is None:
+                if resume:
+                    message = RESUME_NOTE
+                    resume = False
+                elif pi is None:
                     pi = self.pi_factory(rung, workspace.path, self.run_dir / "logs" / f"{prefix}-pi.log")
                     message = task_message(task, self.test_command(task))
                 elif self.config.handoff == "continue":
@@ -265,6 +273,13 @@ class Cascade:
                 attempt, outcome, watch_signal = self._attempt(pi, rung, message, path)
                 stop = attempt.stop_reason
                 attempts.append(attempt)
+                if stop == "error" and resumes < self.config.pi.provider_retries and pi.alive():
+                    # The provider failed even after pi's own retries (a dropped relay connection, say):
+                    # wait, then resume the same session on the same rung instead of failing the task.
+                    resumes += 1
+                    time.sleep(self.config.pi.provider_retry_delay * resumes)
+                    resume = True
+                    continue
                 if stop == "error" or stop == "timeout":
                     failure, detail = "error", outcome.error or "pi run timed out"
                     break
