@@ -212,11 +212,24 @@ def test_a_request_pi_retried_is_not_an_error(tmp_path, repo):
 
 def test_a_request_pi_gave_up_on_fails_the_task(tmp_path, repo):
     write_package(repo, [{}], commit=True)
-    runs = {"cheap": [[{"provider_error": "Request timed out."}]]}
-    _, _, [report] = run(tmp_path, repo, runs)
+    runs = {"cheap": [[{"provider_error": "Request timed out."}]] * 3}
+    fake, _, [report] = run(tmp_path, repo, runs, pi={"command": ["pi"], "provider_retries": 2, "provider_retry_delay": 0})
 
     assert report.solved_tier is None and report.failure_category == "error"
     assert "timed out" in report.failure_detail
+    assert len(fake.prompts()) == 3  # the first prompt and two resumes
+
+
+def test_a_provider_error_resumes_the_session_on_the_same_tier(tmp_path, repo):
+    write_package(repo, [{}], commit=True)
+    runs = {"cheap": [[{"provider_error": "Request timed out."}], [FIX, done()]]}
+    fake, _, [report] = run(tmp_path, repo, runs, pi={"command": ["pi"], "provider_retry_delay": 0})
+
+    assert report.solved_tier == "T1" and report.failure_category is None and not report.escalations
+    assert [a.stop_reason for a in report.attempts] == ["error", "settled"]
+    kinds = [c["type"] for c in fake.commands()]
+    assert "new_session" not in kinds and "set_model" not in kinds  # same session, same model
+    assert fake.prompts()[1][1].startswith("The connection to the model failed")
 
 
 def test_conflicting_upstream_branches_are_resolved_before_the_task(tmp_path, repo):

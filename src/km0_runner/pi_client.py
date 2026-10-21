@@ -123,6 +123,9 @@ class PiClient:
             if self._stderr:
                 self._stderr.close()
 
+    def alive(self) -> bool:
+        return self.process is not None and self.process.poll() is None
+
     def __enter__(self) -> PiClient:
         return self.start()
 
