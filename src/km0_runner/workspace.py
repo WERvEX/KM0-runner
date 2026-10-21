@@ -39,7 +39,7 @@ MARKER = re.compile(r"^(<<<<<<<|>>>>>>>)( |$)|^=======$", re.MULTILINE)
 
 
 def git(cwd: str | Path, *args: str, check: bool = True) -> str:
-    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, errors="replace")
     if check and result.returncode != 0:
         raise GitError(f"git {' '.join(args)} failed in {cwd}: {(result.stderr or result.stdout).strip()[-1000:]}")
     return result.stdout.strip()
@@ -99,7 +99,11 @@ class Workspaces:
         resolved: list[str] = []
         for other in upstream[1:]:
             merged = subprocess.run(
-                ["git", *AUTHOR, "merge", "-q", "--no-edit", self.branch(other)], cwd=path, capture_output=True, text=True
+                ["git", *AUTHOR, "merge", "-q", "--no-edit", self.branch(other)],
+                cwd=path,
+                capture_output=True,
+                text=True,
+                errors="replace",
             )
             if merged.returncode == 0:
                 continue
@@ -164,7 +168,11 @@ class Workspaces:
 
     def diff(self, workspace: Workspace, commit: str) -> str:
         return subprocess.run(
-            ["git", "diff", workspace.base_commit, commit], cwd=workspace.path, capture_output=True, text=True
+            ["git", "diff", workspace.base_commit, commit],
+            cwd=workspace.path,
+            capture_output=True,
+            text=True,
+            errors="replace",
         ).stdout
 
     def working_diff(self, workspace: Workspace) -> str:

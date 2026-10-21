@@ -63,6 +63,15 @@ def test_cheap_tier_solves_and_commits_to_its_branch(tmp_path, repo):
     assert model == "cheap" and prompt.startswith("Task 1") and f"run `{CHECK}`" in prompt and "Do not commit" in prompt
 
 
+def test_a_file_that_is_not_utf8_still_gets_a_diff(tmp_path, repo):
+    write_package(repo, [{}], commit=True)
+    gbk = bash("python -c \"open('notes.txt', 'wb').write('试用期'.encode('gbk'))\"")
+    _, run_dir, [report] = run(tmp_path, repo, {"cheap": [[FIX, gbk, done()]]})
+
+    assert report.solved_tier == "T1" and report.commit
+    assert "notes.txt" in (run_dir / report.diff).read_text()
+
+
 def test_failing_tests_escalate_with_a_discard_handoff(tmp_path, repo):
     write_package(repo, [{}], commit=True)
     runs = {"cheap": [[bash("echo wrong >> notes.txt"), done()]], "mid": [[FIX, done()]]}
