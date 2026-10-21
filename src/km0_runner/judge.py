@@ -25,7 +25,9 @@ def run_test_command(
     if docker_image:
         argv = ["docker", "run", "--rm", "--network", "host", "-v", f"{workspace}:/workspace", "-w", "/workspace", docker_image, *argv]
     try:
-        result = subprocess.run(argv, cwd=workspace, env=TEST_ENV, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(
+            argv, cwd=workspace, env=TEST_ENV, capture_output=True, text=True, errors="replace", timeout=timeout
+        )
     except subprocess.TimeoutExpired:
         return TestResult(passed=False, judge="command", detail=f"`{command}` timed out after {timeout}s")
     tail = (result.stdout + result.stderr)[-3000:]
