@@ -9,8 +9,10 @@ import sys
 import tempfile
 from pathlib import Path
 
+from . import __version__
 from .handoff import load_km0_package, load_swebench_instances
 from .pi_client import PiError, pi_version
+from .progress import STOP_FILE, StopRequest
 from .runner import default_pi_factory, new_run_id, run_package
 from .summary import load_reports, plot, summarize, write_points
 from .tiers import RunnerConfig, load_config
@@ -27,22 +29,35 @@ def checked_pi_version(config: RunnerConfig) -> str:
     return version
 
 
+EXIT_CANCELLED = 3
+
+
 def run_run(args: argparse.Namespace) -> int:
+    """Exit codes: 0 every task finished without a failure, 1 some failed or were blocked, 3 the run was stopped."""
     config = load_config(args.config)
     version = checked_pi_version(config)
     package = load_km0_package(args.package)
     only = [f"{int(t):02d}" for t in args.tasks] if args.tasks else None
-    run_dir, reports = run_package(
-        package, args.repo, config, args.runs, args.run_id, pi_version=version, only=only, start=args.start_tier,
-        reuse=args.reuse
-    )
+    run_id = args.run_id or new_run_id()
+    stop = StopRequest(Path(args.runs).resolve() / run_id / STOP_FILE)
+    restore = stop.install_signal_handlers()
+    try:
+        run_dir, reports = run_package(
+            package, args.repo, config, args.runs, run_id, pi_version=version, only=only, start=args.start_tier,
+            reuse=args.reuse, stop=stop,
+        )  # fmt: skip
+    finally:
+        restore()
     summary = json.loads((run_dir / "summary.json").read_text())
     print(
         f"run {run_dir.name}: {summary['passed']} passed, {summary['unjudged']} for KM0 to judge, "
-        f"{summary['failed']} failed, {summary['blocked']} blocked; cost ${summary['cost']:.4f}"
+        f"{summary['failed']} failed, {summary['blocked']} blocked, {summary['cancelled']} cancelled; "
+        f"cost ${summary['cost']:.4f}"
         + (f" (all on the top tier: ~${summary['top_tier_estimate']:.4f})" if summary["top_tier_estimate"] else "")
     )
     print(f"reports in {run_dir / 'reports'}; branches km0/{run_dir.name}/NN in {Path(args.repo).resolve()}")
+    if stop.requested:
+        return EXIT_CANCELLED
     return 0 if all(r.failure_category in (None,) for r in reports) else 1
 
 
@@ -165,6 +180,7 @@ def run_bridge(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="km0-runner", description=__doc__)
     parser.add_argument("-v", "--verbose", action="store_true")
+    parser.add_argument("--version", action="version", version=f"km0-runner {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     def common(p: argparse.ArgumentParser) -> None:

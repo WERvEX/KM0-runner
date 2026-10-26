@@ -64,6 +64,21 @@ km0-runner run path/to/km0 --repo path/to/repo -c runner.yaml --tasks 2 --reuse 
 
 Upstream tasks left out of `--tasks` then start from the earlier run's branches.
 
+### Following and stopping a run
+
+While it works the Runner appends events to `runs/<run_id>/progress.jsonl`, one JSON object per line, flushed
+as they happen, so KM0 (or `tail -f`) can follow the run and pick it up again after a restart: `run_started`,
+`task_started`, `attempt_started` and `attempt_finished` (tier, model, cost), `escalation`, `test_result`,
+`merge_resolution`, `task_finished` (status `passed`, `unjudged`, `failed`, `blocked` or `cancelled`, and cost)
+and `run_finished`. Each line carries `seq` and an `at` timestamp; the fields are listed in
+`src/km0_runner/progress.py`.
+
+To stop a run, send it SIGTERM (or press Ctrl+C), or create `runs/<run_id>/STOP`, which works on Windows too.
+The Runner aborts pi, commits what the current task has so far to its branch, reports that task and every task
+not yet run as `cancelled`, removes the worktrees and writes the summary. `run` exits with 0 when every task
+finished without a failure, 1 when some failed or were blocked, and 3 when the run was stopped.
+`km0-runner --version` prints the version, which KM0 checks before it starts a run.
+
 ## How a task runs
 
 1. **Start tier.** KM0's tier maps onto the ladder through `km0_tiers`. With `exploration.rate` set, that
