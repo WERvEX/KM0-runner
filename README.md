@@ -25,10 +25,11 @@ pip install -e ".[dev]"                                 # add ",swebench" for th
 pytest
 ```
 
-The Runner works on Linux, macOS and Windows, and CI runs the tests on all three. It needs `git` and `bash` on
-PATH, because each task's test command runs in `bash -lc`. On Windows that bash should be Git for Windows'
-(Git Bash): put its `bin` folder (usually `C:\Program Files\Git\bin`) on PATH ahead of `C:\Windows\System32`,
-or the Runner finds WSL's `bash.exe` instead. Git's installer only adds `Git\cmd`, which has no bash.
+The Runner works on Linux, macOS and Windows, and CI runs the tests on all three. It needs `git` and `bash`,
+because each task's test command runs in `bash -lc`. On Windows that bash is Git for Windows' (Git Bash).
+Git's installer only puts `Git\cmd` on PATH, which has no bash. So when PATH has no bash, or only WSL's in
+System32, the Runner uses the `bash.exe` of the Git install that `git` comes from, or the one in
+`Program Files\Git`.
 
 Models come from pi. A relay or any OpenAI-compatible endpoint is a provider in pi's `models.json`
 (`configs/models.example.json`); the Runner config names models as `provider/modelId`.
@@ -204,7 +205,7 @@ regression check for Runner changes, not a goal.
 
 ## Status
 
-Version 0.2.0, the version KM0 1.0 requires. KM0 1.0 starts the Runner itself: it generates the Runner config
+Version 0.2.1; KM0 1.0 needs 0.2.0 or newer. KM0 1.0 starts the Runner itself: it generates the Runner config
 and pi's `models.json` from its own providers, follows `progress.jsonl`, can stop a run, and imports and judges
 the reports when the run ends.
 
