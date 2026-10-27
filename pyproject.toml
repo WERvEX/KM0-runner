@@ -1,6 +1,6 @@
 [project]
 name = "km0-runner"
-version = "0.2.0"
+version = "0.2.1"
 description = "Runs KM0 task packages with pi on a ladder of model tiers, escalates on trajectory signals, and reports back for KM0 acceptance and routing calibration."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,7 +12,7 @@ dependencies = [
 
 [project.optional-dependencies]
 swebench = ["swebench>=4"]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "matplotlib>=3"]
 
 [project.scripts]
 km0-runner = "km0_runner.cli:main"

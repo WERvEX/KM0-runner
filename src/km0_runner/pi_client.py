@@ -16,7 +16,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -45,8 +45,31 @@ class RunOutcome:
 def resolve(argv: list[str]) -> list[str]:
     """`argv` with its program looked up on PATH. On Windows this finds npm's `pi.cmd` and Git's `bash.exe`;
     without it CreateProcess finds neither, or WSL's `bash.exe` in System32 first."""
-    found = shutil.which(argv[0]) if argv else None
+    if not argv:
+        return argv
+    if os.name == "nt" and argv[0] == "bash":
+        found = windows_bash(shutil.which, os.environ)
+    else:
+        found = shutil.which(argv[0])
     return [found, *argv[1:]] if found else argv
+
+
+def windows_bash(which: Callable[[str], str | None], environ: Mapping[str, str]) -> str | None:
+    """Git for Windows' bash. The bash on PATH, unless that is WSL's in System32; otherwise the one next to
+    `git` (Git's installer only puts `Git\\cmd` on PATH, which has no bash) or in Program Files."""
+    found = which("bash")
+    system32 = Path(environ.get("SystemRoot", r"C:\Windows"), "System32")
+    if found and os.path.normcase(str(Path(found).parent)) != os.path.normcase(str(system32)):
+        return found
+    roots: list[Path] = []
+    if git := which("git"):
+        roots += list(Path(git).parents)[:3]  # Git\cmd\git.exe, Git\bin\git.exe, Git\mingw64\bin\git.exe
+    roots += [Path(environ[name], "Git") for name in ("ProgramFiles", "ProgramW6432") if environ.get(name)]
+    for root in roots:
+        for candidate in (root / "bin" / "bash.exe", root / "usr" / "bin" / "bash.exe"):
+            if candidate.is_file():
+                return str(candidate)
+    return found
 
 
 def pi_version(command: list[str]) -> str:

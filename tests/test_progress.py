@@ -6,6 +6,7 @@ import time
 from conftest import FakePi, bash, done, ladder
 from test_cascade import FIX, write_package
 
+from km0_runner import __version__
 from km0_runner.cli import main
 from km0_runner.handoff import load_km0_package
 from km0_runner.progress import StopRequest
@@ -96,7 +97,7 @@ def test_the_cli_reports_its_version(capsys):
         main(["--version"])
     except SystemExit as exit:
         assert exit.code == 0
-    assert capsys.readouterr().out.strip() == "km0-runner 0.2.0"
+    assert capsys.readouterr().out.strip() == f"km0-runner {__version__}"
 
 
 def test_the_cli_exits_3_when_stopped(tmp_path, repo):
