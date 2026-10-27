@@ -209,14 +209,17 @@ Version 0.2.1; KM0 1.0 needs 0.2.0 or newer. KM0 1.0 starts the Runner itself: i
 and pi's `models.json` from its own providers, follows `progress.jsonl`, can stop a run, and imports and judges
 the reports when the run ends.
 
-Stages 0 and 1 of the plan are in place and tested on Linux, macOS and Windows. A scripted fake pi covers
-signals, the three handoffs, budgets, dependencies, blocking, exploration, progress events and stopping, and
-the real pi runs end to end against the scripted bridge.
+Everything above is in place and tested on Linux, macOS and Windows. A scripted fake pi covers signals, the
+three handoffs, budgets, dependencies, blocking, exploration, progress events and stopping, and the real pi
+runs end to end against the scripted bridge.
 
 Not done yet:
 
 - **Runs on real models.** The baselines and the cascade have not been run on real models yet, so the cost
-  against solve rate comparison and calibration on real data are still to come. Those runs need the relay
-  configured in pi's `models.json`.
+  against solve rate comparison and calibration on real data are still to come.
 - **A ladder per task.** KM0 1.0 works out an escalation chain for each task, but the Runner takes one
   ladder for the whole run. KM0 moves a task whose chosen model is not on that ladder onto the ladder's model.
+
+What comes next and in which order is in [docs/ROADMAP.md](docs/ROADMAP.md). How a change goes from a branch
+to a release, and what has to change in KM0 alongside it, is in [CONTRIBUTING.md](CONTRIBUTING.md). Both are
+in Chinese, like KM0's own planning docs.
