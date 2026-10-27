@@ -56,7 +56,9 @@ def respond(command, data=None, success=True, error=None):
 def run_tool(name, args):
     cwd = Path.cwd()
     if name == "bash":
-        result = subprocess.run([shutil.which("bash") or "bash", "-c", args["command"]], cwd=cwd, capture_output=True, text=True)
+        # Not our stdin: the reader thread is blocked on it, and on Windows handing it to a child then hangs.
+        result = subprocess.run([shutil.which("bash") or "bash", "-c", args["command"]], cwd=cwd, stdin=subprocess.DEVNULL,
+                                capture_output=True, text=True)
         text = (result.stdout + result.stderr) or "(no output)"
         if result.returncode:
             text += f"\n\nCommand exited with code {result.returncode}"
