@@ -12,6 +12,7 @@ jobs:
         # KM0 starts the Runner on all three; Windows stops a run through the STOP file.
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
     defaults:
       run:
         shell: bash
@@ -26,4 +27,8 @@ jobs:
       # The pinned pi, for the end-to-end test against the scripted bridge.
       - run: npm install -g @earendil-works/pi-coding-agent@1.3.0
       - run: pip install -e ".[dev]"
-      - run: pytest
+      - run: |
+          which -a bash
+          python -c "import shutil; print(shutil.which('bash'))"
+          echo "$PATH" | tr ':' '\n' | head -20
+      - run: pytest -o faulthandler_timeout=90 -x
