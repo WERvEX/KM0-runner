@@ -42,9 +42,16 @@ class RunOutcome:
     """A provider error pi gave up on, or the process ending early."""
 
 
+def resolve(argv: list[str]) -> list[str]:
+    """`argv` with its program looked up on PATH. On Windows this finds npm's `pi.cmd` and Git's `bash.exe`;
+    without it CreateProcess finds neither, or WSL's `bash.exe` in System32 first."""
+    found = shutil.which(argv[0]) if argv else None
+    return [found, *argv[1:]] if found else argv
+
+
 def pi_version(command: list[str]) -> str:
     """`pi --version`, as the bare version number."""
-    result = subprocess.run([*command, "--version"], capture_output=True, text=True, timeout=120)
+    result = subprocess.run(resolve([*command, "--version"]), capture_output=True, text=True, timeout=120)
     if result.returncode != 0:
         raise PiError(f"`{' '.join(command)} --version` failed: {result.stderr.strip()[-500:]}")
     return result.stdout.strip().split()[-1].lstrip("v")
@@ -103,7 +110,7 @@ class PiClient:
     def start(self) -> PiClient:
         self._stderr = open(self.log, "ab") if self.log else tempfile.TemporaryFile()  # noqa: SIM115
         self.process = subprocess.Popen(
-            self.argv, cwd=self.cwd, env=self.env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._stderr
+            resolve(self.argv), cwd=self.cwd, env=self.env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._stderr
         )
         threading.Thread(target=self._read, daemon=True).start()
         return self

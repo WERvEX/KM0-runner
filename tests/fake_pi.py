@@ -9,6 +9,7 @@ Every command received is appended to FAKE_PI_LOG. With "shared": true, runs car
 import json
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
@@ -52,7 +53,7 @@ def respond(command, data=None, success=True, error=None):
 def run_tool(name, args):
     cwd = Path.cwd()
     if name == "bash":
-        result = subprocess.run(["bash", "-c", args["command"]], cwd=cwd, capture_output=True, text=True)
+        result = subprocess.run([shutil.which("bash") or "bash", "-c", args["command"]], cwd=cwd, capture_output=True, text=True)
         text = (result.stdout + result.stderr) or "(no output)"
         if result.returncode:
             text += f"\n\nCommand exited with code {result.returncode}"
