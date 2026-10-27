@@ -210,10 +210,13 @@ class PiClient:
         message: str,
         on_event: Callable[[dict[str, Any]], Any],
         timeout: float = 3600,
+        should_stop: Callable[[], bool] | None = None,
     ) -> RunOutcome:
         """Send a prompt and feed every event to `on_event` until `agent_settled`.
 
         When `on_event` returns something truthy the run is aborted, and that value comes back as `stop`.
+        `should_stop` is asked at least once a second, events or not; when it says yes the run is aborted with
+        stop `cancelled`.
         """
         while not self.events.empty():  # events of an earlier run
             if self.events.get_nowait() is None:
@@ -226,19 +229,24 @@ class PiClient:
         error: str | None = None
         while True:
             try:
-                event = self.events.get(timeout=max(0.1, deadline - time.monotonic()))
+                event = self.events.get(timeout=min(1.0, max(0.1, deadline - time.monotonic())))
             except queue.Empty:
                 event = {}
+            if stop is None and should_stop is not None and should_stop():
+                stop = "cancelled"
+                self.send({"type": "abort"})
+                deadline = time.monotonic() + 120  # give the abort time to settle
             if event is None:
                 return RunOutcome(aborted=True, stop=stop, error=error or f"pi exited: {self.stderr_tail(500)}")
-            if not event and time.monotonic() >= deadline and stop is None:
+            if not event:
+                # The queue wakes up every second; only a passed deadline means something.
+                if time.monotonic() < deadline:
+                    continue
+                if stop is not None:
+                    return RunOutcome(aborted=True, stop=stop, error="pi did not settle after abort")
                 stop = "timeout"
                 self.send({"type": "abort"})
                 deadline = time.monotonic() + 120  # give the abort time to settle
-                continue
-            if not event:
-                if stop is not None:
-                    return RunOutcome(aborted=True, stop=stop, error="pi did not settle after abort")
                 continue
             kind = event.get("type")
             if kind == "auto_retry_end":

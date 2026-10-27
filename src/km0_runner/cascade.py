@@ -13,6 +13,7 @@ from . import __version__
 from .handoff import RunTask
 from .judge import run_test_command
 from .pi_client import PiClient, PiError, RunOutcome, tool_text
+from .progress import NEVER, Progress, StopRequest
 from .report import Attempt, Escalation, ExecutionReport, FailureCategory, StopReason, TestResult, Tokens
 from .signals import Signal, SignalMonitor
 from .tiers import RunnerConfig, Rung, Tier
@@ -120,6 +121,8 @@ class Cascade:
         pi_version: str | None,
         check: Check | None = None,
         project_id: int | str | None = None,
+        progress: Progress | None = None,
+        stop: StopRequest = NEVER,
     ):
         self.config = config
         self.run_dir = Path(run_dir)
@@ -129,6 +132,8 @@ class Cascade:
         self.pi_version = pi_version
         self.check = check or self._test_command
         self.project_id = project_id
+        self.progress = progress or Progress()
+        self.stop = stop
         self.config_hash = config.hash(pi_version, runner_prompt())
 
     def test_command(self, task: RunTask) -> str | None:
@@ -147,15 +152,22 @@ class Cascade:
             cost=round(sum(a.cost for a in attempts), 6), steps=sum(a.steps for a in attempts),
         )  # fmt: skip
 
+    def cancelled(self, task: RunTask) -> ExecutionReport:
+        """A task the run was stopped before."""
+        return self._report(task, start=None, explored=False, failure="cancelled", detail="the run was stopped first")
+
     def _attempt(
-        self, pi: PiClient, rung: Rung, message: str, path: Path, purpose: str = "task"
+        self, pi: PiClient, rung: Rung, message: str, path: Path, purpose: str = "task", task_id: str = ""
     ) -> tuple[Attempt, RunOutcome, Signal | None]:
         """Play one prompt on pi, watching budgets and signals; the attempt, pi's outcome and the signal that fired."""
         before = pi.stats()
+        self.progress.emit("attempt_started", task_id=task_id, tier=rung.name, model=rung.model, purpose=purpose)
         with path.open("w", encoding="utf-8") as events:
             watch = _Watch(rung, SignalMonitor(self.config.signals), events)
             attempt_start = time.monotonic()
-            outcome = pi.run(message, watch.handle, timeout=self.config.pi.turn_timeout)
+            outcome = pi.run(
+                message, watch.handle, timeout=self.config.pi.turn_timeout, should_stop=lambda: self.stop.requested
+            )
         after = pi.stats()
         stop: StopReason = outcome.stop or ("error" if outcome.error else "settled")
         attempt = Attempt(
@@ -170,7 +182,16 @@ class Cascade:
             signal=watch.signal.name if watch.signal else None,
             events=str(path.relative_to(self.run_dir)),
         )
+        self.progress.emit(
+            "attempt_finished", task_id=task_id, tier=rung.name, model=rung.model, purpose=purpose,
+            cost=attempt.cost, steps=attempt.steps, stop_reason=stop,
+        )  # fmt: skip
         return attempt, outcome, watch.signal
+
+    def _checked(self, task: RunTask, workspace: Workspace) -> TestResult:
+        result = self.check(task, workspace)
+        self.progress.emit("test_result", task_id=task.task_id, passed=result.passed, detail=result.detail[-500:])
+        return result
 
     def resolve_merge(
         self, task: RunTask, tier: Tier, path: Path, files: list[str], branch: str, attempts: list[Attempt]
@@ -188,19 +209,26 @@ class Cascade:
         pi = self.pi_factory(rung, path, self.run_dir / "logs" / f"{task.task_id}-merge-pi.log")
         try:
             attempt, outcome, signal = self._attempt(
-                pi, rung, message, events_dir / f"{task.task_id}-merge-{len(attempts) + 1}-{tier}.jsonl", "merge"
-            )
+                pi, rung, message, events_dir / f"{task.task_id}-merge-{len(attempts) + 1}-{tier}.jsonl", "merge",
+                task.task_id,
+            )  # fmt: skip
         except PiError as error:
-            return f"resolving the conflict failed: {error}"
+            return self._merged(task, files, f"resolving the conflict failed: {error}")
         finally:
             pi.close()
         attempts.append(attempt)
         if attempt.stop_reason != "settled":
-            return f"resolving the conflict stopped ({attempt.stop_reason}): {outcome.error or (signal.detail if signal else '')}"
-        test = attempt.test_result = self.check(task, Workspace(task.task_id, path, "", ""))
+            why = outcome.error or (signal.detail if signal else "")
+            return self._merged(task, files, f"resolving the conflict stopped ({attempt.stop_reason}): {why}")
+        test = attempt.test_result = self._checked(task, Workspace(task.task_id, path, "", ""))
         if test.passed is False:
-            return f"tests fail after resolving the conflict: {test.detail.splitlines()[0] if test.detail else ''}"
-        return None
+            first = test.detail.splitlines()[0] if test.detail else ""
+            return self._merged(task, files, f"tests fail after resolving the conflict: {first}")
+        return self._merged(task, files, None)
+
+    def _merged(self, task: RunTask, files: list[str], problem: str | None) -> str | None:
+        self.progress.emit("merge_resolution", task_id=task.task_id, files=files, resolved=problem is None)
+        return problem
 
     def _report(self, task: RunTask, start: Tier | None, explored: bool, **fields: Any) -> ExecutionReport:
         failure = fields.pop("failure", None)
@@ -250,6 +278,9 @@ class Cascade:
         resume = False
         try:
             while True:
+                if self.stop.requested:
+                    failure, detail = "cancelled", "the run was stopped"
+                    break
                 rung = self.config.rung(tier)
                 index = sum(1 for a in attempts if a.purpose == "task") + 1
                 if resume:
@@ -270,9 +301,12 @@ class Cascade:
                     if self.config.handoff == "discard" and note:
                         message = f"{message}\n\n---\n{note}"
                 path = events_dir / f"{prefix}-attempt-{index}-{tier}.jsonl"
-                attempt, outcome, watch_signal = self._attempt(pi, rung, message, path)
+                attempt, outcome, watch_signal = self._attempt(pi, rung, message, path, task_id=task.task_id)
                 stop = attempt.stop_reason
                 attempts.append(attempt)
+                if stop == "cancelled":
+                    failure, detail = "cancelled", "the run was stopped"
+                    break
                 if stop == "error" and resumes < self.config.pi.provider_retries and pi.alive():
                     # The provider failed even after pi's own retries (a dropped relay connection, say):
                     # wait, then resume the same session on the same rung instead of failing the task.
@@ -285,7 +319,7 @@ class Cascade:
                     break
                 signal = watch_signal
                 if stop == "settled":
-                    last_test = attempt.test_result = self.check(task, workspace)
+                    last_test = attempt.test_result = self._checked(task, workspace)
                     if last_test.passed is not False:
                         solved = tier if last_test.passed else None
                         break
@@ -300,9 +334,11 @@ class Cascade:
                     )  # fmt: skip
                     detail = signal.detail
                     if last_test is None:
-                        last_test = self.check(task, workspace)
+                        last_test = self._checked(task, workspace)
                     break
-                escalations.append(Escalation(from_tier=tier, to_tier=upper, step=signal.step, signal=signal.name, detail=signal.detail))
+                escalation = Escalation(from_tier=tier, to_tier=upper, step=signal.step, signal=signal.name, detail=signal.detail)
+                escalations.append(escalation)
+                self.progress.emit("escalation", task_id=task.task_id, **escalation.model_dump(exclude={"step"}))
                 note = HANDOFF_NOTE.format(detail=signal.detail, diffstat=self.workspaces.working_diff(workspace) or "(none)")
                 tier = upper
         except PiError as error:

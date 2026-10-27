@@ -16,9 +16,10 @@ FailureCategory = Literal[
     "signal_on_top_tier",  # a trajectory signal fired on the top tier; nowhere left to escalate
     "blocked",  # an upstream task failed, or merging the upstream branches conflicted
     "error",  # the run crashed: pi, the model provider, or a Runner bug
+    "cancelled",  # the run was asked to stop before the task finished, or before it started
 ]
 
-StopReason = Literal["settled", "signal", "step_budget", "cost_budget", "timeout", "error"]
+StopReason = Literal["settled", "signal", "step_budget", "cost_budget", "timeout", "error", "cancelled"]
 
 
 class Escalation(BaseModel):
