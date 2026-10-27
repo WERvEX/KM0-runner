@@ -26,16 +26,4 @@ jobs:
       # The pinned pi, for the end-to-end test against the scripted bridge.
       - run: npm install -g @earendil-works/pi-coding-agent@1.3.0
       - run: pip install -e ".[dev]"
-      - run: pytest --basetemp="$RUNNER_TEMP/pt"
-      - if: failure()
-        run: |
-          python - <<'PY'
-          import json, os, pathlib
-          base = pathlib.Path(os.environ["RUNNER_TEMP"], "pt")
-          for report in sorted(base.glob("test_cheap_tier*/runs/*/reports/*.json"))[:2] + sorted(base.glob("test_continue*/runs/*/reports/*.json"))[:2]:
-              data = json.loads(report.read_text(encoding="utf-8"))
-              print(report, data.get("failure_category"), data.get("failure_detail"))
-          for log in sorted(base.glob("test_cheap_tier*/runs/*/logs/*"))[:3] + sorted(base.glob("test_continue*/runs/*/logs/*"))[:3]:
-              print("==", log); print(log.read_bytes()[-3000:].decode("utf-8", "replace"))
-          for f in sorted(base.glob("test_cheap_tier*/**/*"))[:80]: print(f)
-          PY
+      - run: pytest

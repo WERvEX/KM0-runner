@@ -84,7 +84,7 @@ def test_stopping_mid_task_aborts_pi_keeps_its_work_and_cleans_up(tmp_path, repo
     assert time.monotonic() - began < 15  # nowhere near the twenty seconds the script would take
     first, second = reports
     assert first.failure_category == "cancelled" and first.attempts[-1].stop_reason == "cancelled"
-    assert first.commit and "a + b" in (run_dir / first.diff).read_text()  # the partial work is on its branch
+    assert first.commit and "a + b" in (run_dir / first.diff).read_text(encoding="utf-8")  # the partial work is on its branch
     assert second.failure_category == "cancelled"
     assert not (run_dir / "worktrees" / "01").exists()
     statuses = [(e["task_id"], e["status"]) for e in events(run_dir) if e["event"] == "task_finished"]

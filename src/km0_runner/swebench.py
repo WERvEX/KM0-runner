@@ -62,7 +62,7 @@ class HarnessJudge:
         report = self.workdir / "logs" / "run_evaluation" / run_id / model / task.task_id / "report.json"
         if not report.exists():
             return TestResult(passed=False, judge="swebench", detail=f"harness wrote no report\n{(result.stdout + result.stderr)[-2000:]}")
-        verdict = json.loads(report.read_text())[task.task_id]
+        verdict = json.loads(report.read_text(encoding="utf-8"))[task.task_id]
         return TestResult(passed=bool(verdict.get("resolved")), judge="swebench", detail=f"report: {report}")
 
 

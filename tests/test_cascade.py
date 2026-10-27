@@ -53,7 +53,7 @@ def test_cheap_tier_solves_and_commits_to_its_branch(tmp_path, repo):
     assert "a - b" in (repo / "calc.py").read_text()  # the user's checkout is untouched
     assert report.acceptance == ["WHEN add(2, 3) THEN 5"]
     assert report.cost == pytest.approx(0.03) and report.steps == 3 and report.tokens.input == 300
-    diff = (run_dir / report.diff).read_text()
+    diff = (run_dir / report.diff).read_text(encoding="utf-8")
     assert "+    return a + b" in diff and "km0/" not in diff
     summary = json.loads((run_dir / "summary.json").read_text())
     assert summary["passed"] == 1 and summary["tiers"]["T1"]["attempts"] == 1
@@ -69,7 +69,7 @@ def test_a_file_that_is_not_utf8_still_gets_a_diff(tmp_path, repo):
     _, run_dir, [report] = run(tmp_path, repo, {"cheap": [[FIX, gbk, done()]]})
 
     assert report.solved_tier == "T1" and report.commit
-    assert "notes.txt" in (run_dir / report.diff).read_text()
+    assert "notes.txt" in (run_dir / report.diff).read_text(encoding="utf-8")
 
 
 def test_failing_tests_escalate_with_a_discard_handoff(tmp_path, repo):
@@ -254,8 +254,8 @@ def test_conflicting_upstream_branches_are_resolved_before_the_task(tmp_path, re
     assert merge.purpose == "merge" and merge.test_result.passed and task.purpose == "task"
     assert three.cost == pytest.approx(merge.cost + task.cost) and merge.cost > 0
     # The task's own diff leaves the resolution out; the merge diff shows it.
-    assert "three.txt" in (run_dir / three.diff).read_text() and "calc.py" not in (run_dir / three.diff).read_text()
-    assert "return a + b" in (run_dir / three.merge_diff).read_text()
+    assert "three.txt" in (run_dir / three.diff).read_text(encoding="utf-8") and "calc.py" not in (run_dir / three.diff).read_text(encoding="utf-8")
+    assert "return a + b" in (run_dir / three.merge_diff).read_text(encoding="utf-8")
     parents = subprocess.run(["git", "rev-list", "--parents", "-n1", three.base_commit], cwd=repo,
                              capture_output=True, text=True, check=True).stdout.split()
     assert len(parents) == 3 and two.commit in parents

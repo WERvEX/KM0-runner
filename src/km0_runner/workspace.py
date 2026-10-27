@@ -129,7 +129,7 @@ class Workspaces:
             if git(path, "rev-parse", "-q", "--verify", "HEAD^2", check=False) == git(path, "rev-parse", other):
                 return None
             return "the merge was aborted during resolution"
-        marked = [f for f in files if (path / f).is_file() and MARKER.search((path / f).read_text(errors="replace"))]
+        marked = [f for f in files if (path / f).is_file() and MARKER.search((path / f).read_text(encoding="utf-8", errors="replace"))]
         if marked:
             return f"conflict markers left in {', '.join(marked)}"
         git(path, "add", "-A", "--", ".", *EXCLUDES)
