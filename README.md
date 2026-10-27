@@ -26,8 +26,9 @@ pytest
 ```
 
 The Runner works on Linux, macOS and Windows, and CI runs the tests on all three. It needs `git` and `bash` on
-PATH, because each task's test command runs in `bash -lc`. On Windows that bash is Git for Windows' (Git
-Bash), not WSL's.
+PATH, because each task's test command runs in `bash -lc`. On Windows that bash should be Git for Windows'
+(Git Bash): put its `bin` folder (usually `C:\Program Files\Git\bin`) on PATH ahead of `C:\Windows\System32`,
+or the Runner finds WSL's `bash.exe` instead. Git's installer only adds `Git\cmd`, which has no bash.
 
 Models come from pi. A relay or any OpenAI-compatible endpoint is a provider in pi's `models.json`
 (`configs/models.example.json`); the Runner config names models as `provider/modelId`.
