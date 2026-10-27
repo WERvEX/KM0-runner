@@ -9,6 +9,7 @@ import os
 import subprocess
 from pathlib import Path
 
+from .pi_client import resolve
 from .report import TestResult
 
 
@@ -26,7 +27,7 @@ def run_test_command(
         argv = ["docker", "run", "--rm", "--network", "host", "-v", f"{workspace}:/workspace", "-w", "/workspace", docker_image, *argv]
     try:
         result = subprocess.run(
-            argv, cwd=workspace, env=TEST_ENV, capture_output=True, text=True, errors="replace", timeout=timeout
+            resolve(argv), cwd=workspace, env=TEST_ENV, capture_output=True, text=True, errors="replace", timeout=timeout
         )
     except subprocess.TimeoutExpired:
         return TestResult(passed=False, judge="command", detail=f"`{command}` timed out after {timeout}s")

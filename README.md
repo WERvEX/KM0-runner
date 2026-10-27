@@ -25,6 +25,11 @@ pip install -e ".[dev]"                                 # add ",swebench" for th
 pytest
 ```
 
+The Runner works on Linux, macOS and Windows, and CI runs the tests on all three. It needs `git` and `bash` on
+PATH, because each task's test command runs in `bash -lc`. On Windows that bash should be Git for Windows'
+(Git Bash): put its `bin` folder (usually `C:\Program Files\Git\bin`) on PATH ahead of `C:\Windows\System32`,
+or the Runner finds WSL's `bash.exe` instead. Git's installer only adds `Git\cmd`, which has no bash.
+
 Models come from pi. A relay or any OpenAI-compatible endpoint is a provider in pi's `models.json`
 (`configs/models.example.json`); the Runner config names models as `provider/modelId`.
 
@@ -199,6 +204,18 @@ regression check for Runner changes, not a goal.
 
 ## Status
 
-Stages 0 and 1 of the plan are in place and tested: a scripted fake pi covers signals, the three handoffs,
-budgets, dependencies, blocking and exploration, and the real pi runs end to end against the scripted
-bridge. Real model runs need the relay configured in pi's `models.json`.
+Version 0.2.0, the version KM0 1.0 requires. KM0 1.0 starts the Runner itself: it generates the Runner config
+and pi's `models.json` from its own providers, follows `progress.jsonl`, can stop a run, and imports and judges
+the reports when the run ends.
+
+Stages 0 and 1 of the plan are in place and tested on Linux, macOS and Windows. A scripted fake pi covers
+signals, the three handoffs, budgets, dependencies, blocking, exploration, progress events and stopping, and
+the real pi runs end to end against the scripted bridge.
+
+Not done yet:
+
+- **Runs on real models.** The baselines and the cascade have not been run on real models yet, so the cost
+  against solve rate comparison and calibration on real data are still to come. Those runs need the relay
+  configured in pi's `models.json`.
+- **A ladder per task.** KM0 1.0 works out an escalation chain for each task, but the Runner takes one
+  ladder for the whole run. KM0 moves a task whose chosen model is not on that ladder onto the ladder's model.

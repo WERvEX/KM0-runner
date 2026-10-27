@@ -48,7 +48,7 @@ def run_run(args: argparse.Namespace) -> int:
         )  # fmt: skip
     finally:
         restore()
-    summary = json.loads((run_dir / "summary.json").read_text())
+    summary = json.loads((run_dir / "summary.json").read_text(encoding="utf-8"))
     print(
         f"run {run_dir.name}: {summary['passed']} passed, {summary['unjudged']} for KM0 to judge, "
         f"{summary['failed']} failed, {summary['blocked']} blocked, {summary['cancelled']} cancelled; "
@@ -103,7 +103,7 @@ def run_swebench(args: argparse.Namespace) -> int:
 
     config = load_config(args.config)
     version = checked_pi_version(config)
-    predicted = json.loads(Path(args.predicted).read_text()) if args.predicted else None
+    predicted = json.loads(Path(args.predicted).read_text(encoding="utf-8")) if args.predicted else None
     tasks = load_swebench_instances(args.instances, predicted=predicted, ids=args.ids)
     run_id = args.run_id or new_run_id()
     run_dir = Path(args.runs).resolve() / run_id
@@ -151,7 +151,7 @@ def run_calibrate(args: argparse.Namespace) -> int:
     from .calibrate import calibrate
     from .scoring import RoutingRules
 
-    start = RoutingRules.model_validate_json(Path(args.rules).read_text()) if args.rules else None
+    start = RoutingRules.model_validate_json(Path(args.rules).read_text(encoding="utf-8")) if args.rules else None
     test = load_reports(args.test) if args.test else None
     verdicts = load_verdicts([*args.dev, *(args.test or []), *(args.acceptance or [])])
     result = calibrate(load_reports(args.dev), test, start, verdicts)

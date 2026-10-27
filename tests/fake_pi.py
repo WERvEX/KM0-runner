@@ -9,12 +9,16 @@ Every command received is appended to FAKE_PI_LOG. With "shared": true, runs car
 import json
 import os
 import queue
+import shutil
 import subprocess
 import sys
 import threading
 from pathlib import Path
 
-script = json.loads(Path(os.environ["FAKE_PI_SCRIPT"]).read_text())
+# Like the real pi: UTF-8 and LF on every platform, not the Windows console code page.
+sys.stdin.reconfigure(encoding="utf-8")
+sys.stdout.reconfigure(encoding="utf-8", newline="\n")
+script = json.loads(Path(os.environ["FAKE_PI_SCRIPT"]).read_text(encoding="utf-8"))
 log = Path(os.environ["FAKE_PI_LOG"])
 model = next(arg for arg in sys.argv if "/" in arg and sys.argv[sys.argv.index(arg) - 1] == "--model").split("/", 1)[1]
 played: dict[str, int] = {}
@@ -34,7 +38,7 @@ def reader():
     for line in sys.stdin:
         if line.strip():
             command = json.loads(line)
-            with log.open("a") as file:
+            with log.open("a", encoding="utf-8") as file:
                 file.write(json.dumps({**command, "model": model}) + "\n")
             commands.put(command)
     commands.put(None)
@@ -52,7 +56,9 @@ def respond(command, data=None, success=True, error=None):
 def run_tool(name, args):
     cwd = Path.cwd()
     if name == "bash":
-        result = subprocess.run(["bash", "-c", args["command"]], cwd=cwd, capture_output=True, text=True)
+        # Not our stdin: the reader thread is blocked on it, and on Windows handing it to a child then hangs.
+        result = subprocess.run([shutil.which("bash") or "bash", "-c", args["command"]], cwd=cwd, stdin=subprocess.DEVNULL,
+                                capture_output=True, text=True)
         text = (result.stdout + result.stderr) or "(no output)"
         if result.returncode:
             text += f"\n\nCommand exited with code {result.returncode}"
@@ -60,14 +66,14 @@ def run_tool(name, args):
     if name == "write":
         path = cwd / args["path"]
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(args["content"])
+        path.write_text(args["content"], encoding="utf-8")
         return f"Wrote {args['path']}", False, {}
     if name == "edit":
         path = cwd / args["path"]
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")
         if args["oldText"] not in text:
             return f"Could not find the exact text in {args['path']}.", True, {}
-        path.write_text(text.replace(args["oldText"], args["newText"], 1))
+        path.write_text(text.replace(args["oldText"], args["newText"], 1), encoding="utf-8")
         return f"Successfully replaced 1 block(s) in {args['path']}.", False, {}
     return f"unknown tool {name}", True, {}
 
@@ -106,7 +112,7 @@ def aborted():
 def play(prompt_command):
     runs = script["runs"].get(model, [])
     if script.get("shared"):  # runs are consumed across pi processes: count the prompts already logged
-        index = sum(1 for line in log.read_text().splitlines()
+        index = sum(1 for line in log.read_text(encoding="utf-8").splitlines()
                     if json.loads(line)["type"] == "prompt" and json.loads(line)["model"] == model) - 1
     else:
         index = played.get(model, 0)

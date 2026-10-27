@@ -85,7 +85,7 @@ class Bridge:
         self.folder = folder
         self.cache = folder / "cache"
         self.cache.mkdir(parents=True, exist_ok=True)
-        self.script = [json.loads(line) for line in script.read_text().splitlines() if line.strip()] if script else None
+        self.script = [json.loads(line) for line in script.read_text(encoding="utf-8").splitlines() if line.strip()] if script else None
         self.timeout = timeout
         self.poll = poll
         self.lock = threading.Lock()
@@ -98,21 +98,21 @@ class Bridge:
             if self.script is not None:
                 return self.script.pop(0) if self.script else {"text": "(script exhausted)"}
             if cached.exists():
-                return json.loads(cached.read_text())
+                return json.loads(cached.read_text(encoding="utf-8"))
             self.count += 1
             number = f"{self.count:04d}"
-        (self.folder / f"{number}.request.json").write_text(json.dumps(body, ensure_ascii=False, indent=2))
-        (self.folder / f"{number}.request.md").write_text(render(body))
+        (self.folder / f"{number}.request.json").write_text(json.dumps(body, ensure_ascii=False, indent=2), encoding="utf-8")
+        (self.folder / f"{number}.request.md").write_text(render(body), encoding="utf-8")
         response = self.folder / f"{number}.response.json"
         deadline = time.monotonic() + self.timeout
         while time.monotonic() < deadline:
             if response.exists():
                 try:
-                    answer = json.loads(response.read_text())
+                    answer = json.loads(response.read_text(encoding="utf-8"))
                 except json.JSONDecodeError:
                     time.sleep(self.poll)  # still being written
                     continue
-                cached.write_text(json.dumps(answer, ensure_ascii=False))
+                cached.write_text(json.dumps(answer, ensure_ascii=False), encoding="utf-8")
                 return answer
             time.sleep(self.poll)
         return {"text": "(no answer before the bridge timeout)"}
