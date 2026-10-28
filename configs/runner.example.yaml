@@ -19,6 +19,10 @@ ladder:                         # ordered from cheapest to strongest; more than 
     step_limit: 100
     cost_limit: 4.0
 km0_tiers: {T1: T1, T2: T2, T3: T3}   # KM0 tier → starting rung
+# task_ladders:                 # optional: a task's own ladder instead of the one above (KM0 writes these)
+#   "02":
+#     - {name: T2, model: relay/MID-MODEL}            # limits left out come from the rung of the same name
+#     - {name: T3, model: relay/OTHER-STRONG-MODEL, cost_limit: 6.0}
 signals:
   test_fail_streak: 3
   same_file_edits: 5

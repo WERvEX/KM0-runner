@@ -44,6 +44,10 @@ def explore_draw(seed: int, run_id: str, task_id: str) -> float:
 
 def start_tier(config: RunnerConfig, task: RunTask, run_id: str, forced: Tier | None = None) -> tuple[Tier, bool]:
     """The rung to start on and whether it is an exploration one tier below KM0's prediction."""
+    if config.owns_ladder(task.task_id):
+        # KM0 chose where the task starts when it wrote the task's own ladder; a forced rung must be on it.
+        names = config.for_task(task.task_id).names
+        return (forced if forced in names else names[0]), False
     if forced:
         return forced, False
     predicted = config.start_rung(task.predicted_tier)

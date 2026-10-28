@@ -6,7 +6,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from .tiers import HandoffMode, Tier
+from .tiers import HandoffMode, Rung, Tier
 
 REPORT_VERSION = 2
 
@@ -96,6 +96,8 @@ class ExecutionReport(BaseModel):
     failure_category: FailureCategory | None = None
     failure_detail: str = ""
     handoff: HandoffMode
+    ladder: list[Rung] | None = None
+    """The task's own ladder from the config's `task_ladders`; None when it ran on the run's `ladder`."""
     branch: str | None = None
     base_commit: str | None = None
     commit: str | None = None
