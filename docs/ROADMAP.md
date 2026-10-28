@@ -74,8 +74,8 @@ task_ladders:
 - 报告新增可选字段 `ladder`，记录这个任务实际用的阶梯和上限。`attempts[].tier` 记录的是这一级的名字。KM0 用每一步的显示标签（T1/T2/T3）命名；同一条链里重名时加后缀（如 `T2-2`）。KM0 导入时按模型 ID 对回自己的模型；校准只认 T1–T3，其他名字会被忽略。
 
 **两边要做的事**：
-- [x] Runner：`task_ladders` 配置、按任务取阶梯（起步、升档、合并冲突的解决）、报告的 `ladder` 字段、版本 0.3.0
-- [ ] KM0：生成配置时写出 `task_ladders`，把每个任务链上用到的模型都写进 `models.json` 并检查 key，去掉"挪到阶梯上"的提示，`fake-runner.mjs` 同步，`RUNNER_MIN_VERSION` 改为 0.3.0
+- [x] Runner：`task_ladders` 配置、按任务取阶梯（起步、升档、合并冲突的解决）、报告的 `ladder` 字段、版本 0.3.0（[WERvEX/KM0-runner#14](https://github.com/WERvEX/KM0-runner/pull/14)）
+- [ ] KM0：生成配置时写出 `task_ladders`，把每个任务链上用到的模型都写进 `models.json` 并检查 key，去掉"挪到阶梯上"的提示，`fake-runner.mjs` 同步，`RUNNER_MIN_VERSION` 改为 0.3.0（[WERvEX/KM0#13](https://github.com/WERvEX/KM0/pull/13)，在本仓库合并后合并）
 
 **完成标准**：Runner 0.3.0 发布；KM0 的 e2e，以及 `KM0_RUNNER_REAL` 下用真实 Runner 跑的集成测试，都在新配置下通过；没有 `task_ladders` 的配置照常能跑。
 
