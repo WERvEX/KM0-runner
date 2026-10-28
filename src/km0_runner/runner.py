@@ -115,7 +115,7 @@ def summarize_run(
             use.attempts += 1
             use.cost = round(use.cost + attempt.cost, 6)
         if report.solved_tier:
-            tiers[report.solved_tier].solved += 1
+            tiers.setdefault(report.solved_tier, TierUse()).solved += 1
     judged = [r for r in reports if r.test_result and r.test_result.passed is not None and r.failure_category != "blocked"]
     passed = sum(1 for r in judged if r.test_result and r.test_result.passed)
     return RunSummary(

@@ -1,6 +1,6 @@
 [project]
 name = "km0-runner"
-version = "0.2.1"
+version = "0.3.0"
 description = "Runs KM0 task packages with pi on a ladder of model tiers, escalates on trajectory signals, and reports back for KM0 acceptance and routing calibration."
 readme = "README.md"
 requires-python = ">=3.10"

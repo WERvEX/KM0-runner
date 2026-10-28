@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from . import __version__
 
@@ -67,6 +67,24 @@ class Rung(BaseModel):
         return self.model.split("/", 1)[1]
 
 
+class TaskRung(BaseModel):
+    """One rung of a task's own ladder. Limits left out come from the run's rung of the same name, else the defaults."""
+
+    name: Tier
+    model: str
+    step_limit: int | None = None
+    cost_limit: float | None = None
+
+
+def _check_ladder(where: str, rungs: list[Rung] | list[TaskRung]) -> None:
+    names = [rung.name for rung in rungs]
+    if not names or len(set(names)) != len(names):
+        raise ValueError(f"{where} needs at least one rung and unique names")
+    for rung in rungs:
+        if "/" not in rung.model:
+            raise ValueError(f"{where}, rung {rung.name}: model must be provider/modelId, got {rung.model!r}")
+
+
 class SignalConfig(BaseModel):
     """Thresholds for the trajectory signals. Starting guesses, to be tuned on real runs."""
 
@@ -92,6 +110,9 @@ class RunnerConfig(BaseModel):
     pi: PiConfig = Field(default_factory=PiConfig)
     ladder: list[Rung]
     """Ordered from cheapest to strongest."""
+    task_ladders: dict[str, list[TaskRung]] = Field(default_factory=dict)
+    """Task id (`NN`) → that task's own ladder, cheapest first, used instead of `ladder`. KM0 writes one per task
+    from its escalation chain. Such a task starts on its first rung and is never explored lower."""
     km0_tiers: dict[str, Tier] = Field(default_factory=dict)
     """KM0 tier → rung to start on. Missing entries map to the rung of the same name, else the nearest above."""
     signals: SignalConfig = Field(default_factory=SignalConfig)
@@ -104,14 +125,18 @@ class RunnerConfig(BaseModel):
     """Used when a task carries no `testCommand`."""
     test_timeout: int = 900
 
+    @field_validator("task_ladders")
+    @classmethod
+    def _task_ids(cls, value: dict[str, list[TaskRung]]) -> dict[str, list[TaskRung]]:
+        # KM0 numbers tasks; a bare `1` names the same task as `01`.
+        return {(f"{int(key):02d}" if key.isdigit() else key): rungs for key, rungs in value.items()}
+
     @model_validator(mode="after")
     def _check(self) -> RunnerConfig:
-        names = [rung.name for rung in self.ladder]
-        if not names or len(set(names)) != len(names):
-            raise ValueError("ladder needs at least one rung and unique names")
-        for rung in self.ladder:
-            if "/" not in rung.model:
-                raise ValueError(f"rung {rung.name}: model must be provider/modelId, got {rung.model!r}")
+        _check_ladder("ladder", self.ladder)
+        for task_id, rungs in self.task_ladders.items():
+            _check_ladder(f"task_ladders[{task_id}]", rungs)
+        names = self.names
         for km0, rung in self.km0_tiers.items():
             if rung not in names:
                 raise ValueError(f"km0_tiers maps {km0} to unknown rung {rung}")
@@ -153,6 +178,24 @@ class RunnerConfig(BaseModel):
     def below(self, name: Tier) -> Tier | None:
         index = self.index(name)
         return self.names[index - 1] if index > 0 else None
+
+    def owns_ladder(self, task_id: str) -> bool:
+        return task_id in self.task_ladders
+
+    def for_task(self, task_id: str) -> RunnerConfig:
+        """This config with the task's own ladder in place of `ladder`, when it has one."""
+        own = self.task_ladders.get(task_id)
+        if own is None:
+            return self
+        rungs = []
+        for rung in own:
+            base = next((r for r in self.ladder if r.name == rung.name), Rung(name=rung.name, model=rung.model))
+            rungs.append(Rung(
+                name=rung.name, model=rung.model,
+                step_limit=base.step_limit if rung.step_limit is None else rung.step_limit,
+                cost_limit=base.cost_limit if rung.cost_limit is None else rung.cost_limit,
+            ))  # fmt: skip
+        return self.model_copy(update={"ladder": rungs, "km0_tiers": {}, "task_ladders": {}})
 
     def hash(self, pi_version: str | None = None, prompt: str = "") -> str:
         """Hash of everything that changes how a run behaves: config, Runner and pi versions, Runner prompt."""

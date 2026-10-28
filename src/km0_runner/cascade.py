@@ -198,7 +198,7 @@ class Cascade:
     ) -> str | None:
         """Have pi resolve a conflict between the task's upstream branches, on the task's start tier.
         Appends its attempt to `attempts`; returns None when resolved, otherwise why not."""
-        rung = self.config.rung(tier)
+        rung = self.config.for_task(task.task_id).rung(tier)
         events_dir = self.run_dir / "events"
         events_dir.mkdir(parents=True, exist_ok=True)
         command = self.test_command(task)
@@ -248,6 +248,7 @@ class Cascade:
             failure_category=failure,
             failure_detail=detail,
             handoff=self.config.handoff,
+            ladder=self.config.for_task(task.task_id).ladder if self.config.owns_ladder(task.task_id) else None,
             test_command=self.test_command(task),
             depends_on=task.depends_on,
             acceptance=task.acceptance,
@@ -276,12 +277,13 @@ class Cascade:
         prefix = task.task_id if run_index == 0 else f"{task.task_id}.r{run_index}"
         resumes = 0
         resume = False
+        ladder = self.config.for_task(task.task_id)
         try:
             while True:
                 if self.stop.requested:
                     failure, detail = "cancelled", "the run was stopped"
                     break
-                rung = self.config.rung(tier)
+                rung = ladder.rung(tier)
                 index = sum(1 for a in attempts if a.purpose == "task") + 1
                 if resume:
                     message = RESUME_NOTE
@@ -325,7 +327,7 @@ class Cascade:
                         break
                     signal = Signal("tests_failed", last_test.detail.splitlines()[0], attempt.steps)
                 assert signal is not None
-                upper = self.config.above(tier)
+                upper = ladder.above(tier)
                 if upper is None:
                     failure = (
                         "tests_failed" if signal.name == "tests_failed"

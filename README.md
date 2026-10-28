@@ -89,6 +89,10 @@ finished without a failure, 1 when some failed or were blocked, and 3 when the r
 
 1. **Start tier.** KM0's tier maps onto the ladder through `km0_tiers`. With `exploration.rate` set, that
    share of tasks without risk flags starts one tier lower and is marked `explored`.
+   A task listed in the config's `task_ladders` runs on that ladder of its own instead. It starts on the
+   ladder's first rung and is never explored lower. KM0 writes one such ladder per task from its escalation
+   chain, so each task climbs the models KM0 chose for it. A rung there that leaves out `step_limit` or
+   `cost_limit` takes them from the run's rung of the same name, else the defaults (50 turns, $3).
 2. **Execute.** pi starts in RPC mode in the worktree with only `read, bash, edit, write`, and without the
    repository's own pi settings, extensions, skills, prompt templates or MCP servers. The prompt is KM0's task
    prompt plus a short Runner note: run the test command, do not commit, push or switch branches.
@@ -139,6 +143,7 @@ The execution report (`report_version: 2`, `src/km0_runner/report.py`):
 | `run_id`, `project_id`, `task_id` | the run, KM0's project, and the task's seq (`NN`) |
 | `predicted_tier`, `predicted_features`, `predicted_score` | KM0's routing, passed through for calibration |
 | `start_tier`, `explored` | where the task started, and whether that was an exploration one tier lower |
+| `ladder` | the task's own ladder from `task_ladders`, with its limits; absent when it ran on the run's ladder |
 | `solved_tier` | the tier on which the Runner's test command passed; KM0's acceptance decides the rest |
 | `escalations` | each escalation: from, to, turn, signal and detail |
 | `cost`, `steps`, `tokens`, `wall_time` | totals over all attempts, from pi's session stats |
@@ -205,7 +210,7 @@ regression check for Runner changes, not a goal.
 
 ## Status
 
-Version 0.2.1; KM0 1.0 needs 0.2.0 or newer. KM0 1.0 starts the Runner itself: it generates the Runner config
+Version 0.3.0, which adds a ladder per task (`task_ladders`). KM0 1.0 needs 0.2.0 or newer. KM0 1.0 starts the Runner itself: it generates the Runner config
 and pi's `models.json` from its own providers, follows `progress.jsonl`, can stop a run, and imports and judges
 the reports when the run ends.
 
@@ -217,8 +222,9 @@ Not done yet:
 
 - **Runs on real models.** The baselines and the cascade have not been run on real models yet, so the cost
   against solve rate comparison and calibration on real data are still to come.
-- **A ladder per task.** KM0 1.0 works out an escalation chain for each task, but the Runner takes one
-  ladder for the whole run. KM0 moves a task whose chosen model is not on that ladder onto the ladder's model.
+- **KM0 writing `task_ladders`.** The Runner can run each task on its own ladder, but KM0 1.0 still writes
+  one ladder for the whole run. Until KM0 writes `task_ladders`, it moves a task whose chosen model is not on
+  that ladder onto the ladder's model.
 
 What comes next and in which order is in [docs/ROADMAP.md](docs/ROADMAP.md). How a change goes from a branch
 to a release, and what has to change in KM0 alongside it, is in [CONTRIBUTING.md](CONTRIBUTING.md). Both are

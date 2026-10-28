@@ -4,9 +4,10 @@
 
 ## 现状
 
-- **Runner 0.2.x**：KM0 交来的任务包，Runner 在每个任务自己的 git worktree 里用 pi 执行，按 KM0 预测的档位起步，运行中的信号触发时升档，最后留下分支和执行报告。
+- **Runner 0.3.x**：KM0 交来的任务包，Runner 在每个任务自己的 git worktree 里用 pi 执行，按 KM0 预测的档位起步，运行中的信号触发时升档，最后留下分支和执行报告。
   - 0.2.0 加了 `progress.jsonl`、优雅停止和 `--version`。
   - 0.2.1 让 Windows 上不在 PATH 里的 Git Bash 也能找到。
+  - 0.3.0 让每个任务可以带自己的阶梯（`task_ladders`）。
 - **KM0 1.0**：已发布，可以一键启动 Runner、显示进度、停止运行，并自动导入结果、验收。KM0 要求 Runner 至少是 0.2.0。
 - **测试**：CI 在 Linux、macOS、Windows 上跑全部测试，包括用真实 pi 跑的端到端测试，模型由脚本代答。
 - **缺口**：还没有在真实模型上跑过；也还没有在真实的 Windows 机器上，从 KM0 一键跑过一次。
@@ -18,7 +19,7 @@
 | M0 发布 0.2 | 合并进度与停止（#10）；KM0 1.0 发布 | Runner 已合并，差 tag；KM0 已发布 v1.0.0 |
 | M1 补完 Windows | 找 Git Bash；绘图测试进 CI；在真实 Windows 上跑通 | 代码部分已完成（0.2.1），差真机验证 |
 | M2 真实数据 | 在真实模型上跑基线和升档，得出成本与解决率 | 等 key 和预算 |
-| M3 每个任务带自己的阶梯 | 协议升级，Runner 和 KM0 都要改 | 字段已有草案（见下文），未实现 |
+| M3 每个任务带自己的阶梯 | 协议升级，Runner 和 KM0 都要改 | Runner 一侧已完成（0.3.0），KM0 一侧进行中 |
 | M4 闭环校准 | 用真实数据校准路由规则，结果回到 KM0 | 依赖 M2 |
 
 建议顺序：M0 → M1 → M2；M3 可以和 M2 并行，不过有了 M2 的数据更容易判断值不值得做；M4 在 M2 积累了足够的数据之后开始。
@@ -28,7 +29,7 @@
 - [x] [WERvEX/KM0-runner#10](https://github.com/WERvEX/KM0-runner/pull/10)：进度文件、优雅停止、`--version`
 - [x] [WERvEX/KM0-runner#11](https://github.com/WERvEX/KM0-runner/pull/11)：三平台 CI，修复 Windows 上的编码和卡死问题
 - [x] KM0 1.0 合并并打 `v1.0.0`
-- [ ] Runner 打 `v0.2.1` tag
+- [ ] Runner 打 tag（`v0.2.1`，以及 M3 合并后的 `v0.3.0`）
 
 **完成标准**：用 KM0 1.0 的安装包，可以一键跑完 Runner。
 
@@ -57,35 +58,32 @@
 
 **为什么做**：KM0 1.0 会给每个任务算一条升级链（模型组合，最多三步），但 Runner 只认整次运行共用的一条 `ladder`。KM0 现在只能把模型不在这条阶梯上的任务挪到阶梯上对应档位的模型。
 
-**字段草案**（实现前在两个仓库的 PR 里定稿）：
+**定稿的做法**：每个任务的阶梯放在 Runner 配置里，不放在 `tasks.json` 里。阶梯里的 provider（如 `km0-3`）只在 KM0 生成的 pi `models.json` 里存在，模型属于配置，不属于任务内容。这样手动导出的交接包和用户自己的 `runner.yaml` 都不受影响。
 
-```json
-{
-  "seq": 2,
-  "tier": "T2",
-  "ladder": [
-    {"model": "km0-3/<中档模型>", "step_limit": 50, "cost_limit": 3.0},
-    {"model": "km0-3/<强模型>"}
-  ]
-}
+```yaml
+task_ladders:
+  "02":
+    - {name: T2, model: km0-3/<中档模型>}
+    - {name: T3, model: km0-3/<强模型>, cost_limit: 6.0}
 ```
 
-- `ladder` 可选，从便宜到强排列。每一级的 `model` 是 pi 的 `provider/modelId`，provider 必须在这次运行用的 pi `models.json` 里；`step_limit` 和 `cost_limit` 不写就用全局配置的值。
-- 有 `ladder` 的任务从第一级起步，不做"低一档探索"。`retry: true` 的任务也从第一级起步；KM0 重新交接时，要交出已经升过档的那条链。
-- 没有 `ladder` 的任务行为不变：按 `tier` 和 `km0_tiers` 在全局阶梯上起步。
-- 报告里新增一个可选的 `ladder` 字段，记录实际用的阶梯。`attempts[].tier` 改为记录第几级（例如 `L1`、`L2`），还是保留 T1/T2/T3 的标签？这一点要和 KM0 的后验更新一起定。
+- 键是任务编号（`NN`；写成 `2` 也认）。每一级的 `model` 是 pi 的 `provider/modelId`；同一条阶梯里 `name` 不能重复。
+- 某一级没写 `step_limit` 或 `cost_limit` 时，沿用全局 `ladder` 里同名那一级的设置，没有同名的就用默认值。
+- 有自己阶梯的任务从第一级起步，不做"低一档探索"，也不经过 `km0_tiers` 映射。`retry: true` 的任务同样从第一级起步：KM0 重新交接时，已经把失败过的组合从链上去掉了。
+- 没有自己阶梯的任务行为不变。
+- 报告新增可选字段 `ladder`，记录这个任务实际用的阶梯和上限。`attempts[].tier` 记录的是这一级的名字。KM0 用每一步的显示标签（T1/T2/T3）命名；同一条链里重名时加后缀（如 `T2-2`）。KM0 导入时按模型 ID 对回自己的模型；校准只认 T1–T3，其他名字会被忽略。
 
 **两边要做的事**：
-- Runner：`handoff.py` 读这个字段，`tiers.py` 和 `cascade.py` 支持按任务取阶梯，报告加字段，`scoring.py` 和校准不受影响，版本 0.3.0。
-- KM0：`build.ts` 写出这个字段，`execution-service.ts` 把每个任务链上用到的模型都写进 `models.json`，删掉"挪到阶梯上"的提示，`fake-runner.mjs` 同步，`RUNNER_MIN_VERSION` 改为 0.3.0。
+- [x] Runner：`task_ladders` 配置、按任务取阶梯（起步、升档、合并冲突的解决）、报告的 `ladder` 字段、版本 0.3.0
+- [ ] KM0：生成配置时写出 `task_ladders`，把每个任务链上用到的模型都写进 `models.json` 并检查 key，去掉"挪到阶梯上"的提示，`fake-runner.mjs` 同步，`RUNNER_MIN_VERSION` 改为 0.3.0
 
-**完成标准**：Runner 0.3.0 发布；KM0 的 e2e，以及 `KM0_RUNNER_REAL` 下用真实 Runner 跑的集成测试，都在新字段下通过；旧的任务包（没有 `ladder`）照常能跑。
+**完成标准**：Runner 0.3.0 发布；KM0 的 e2e，以及 `KM0_RUNNER_REAL` 下用真实 Runner 跑的集成测试，都在新配置下通过；没有 `task_ladders` 的配置照常能跑。
 
 ### M4 闭环校准
 
 - 用 M2 和之后积累的运行目录跑 `km0-runner calibrate --dev ... --test ... -o routing-rules.json`，在 KM0 的"设置 → Agent"里导入。
 - 拿 KM0 1.0 根据排行榜得出的能力先验，和实际的验收结果对照；偏差大的模型，回头调整 KM0 的模型注册表（`packages/registry`）。
-- M3 落地后，校准的标签要能处理"每个任务的阶梯不同"：标签不再是"最便宜够用的 T 档"，而是"最便宜够用的那一级"。这需要在实现 M3 时一并设计。
+- M3 之后，每个任务的阶梯可能不同。校准目前仍按显示标签 T1–T3 统计，带后缀的级（如 `T2-2`）不计入，而同一个标签下可能有不同的模型。有了真实数据后，要看按标签统计是否够用；不够用时，再改成按模型或按"最便宜够用的那一级"来标注。
 
 **完成标准**：在 test 集上，用校准后的规则算出的期望成本低于校准前，结果写进 README。
 
