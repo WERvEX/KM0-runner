@@ -210,9 +210,10 @@ regression check for Runner changes, not a goal.
 
 ## Status
 
-Version 0.3.0, which adds a ladder per task (`task_ladders`). KM0 1.0 needs 0.2.0 or newer. KM0 1.0 starts the Runner itself: it generates the Runner config
-and pi's `models.json` from its own providers, follows `progress.jsonl`, can stop a run, and imports and judges
-the reports when the run ends.
+Version 0.3.0, which adds a ladder per task (`task_ladders`). KM0 starts the Runner itself: it generates the
+Runner config and pi's `models.json` from its own providers, follows `progress.jsonl`, can stop a run, and
+imports and judges the reports when the run ends. KM0 1.0.0 needs 0.2.0 or newer. KM0 after 1.0.0 writes a
+ladder for each task, up the escalation chain it routed the task along, and needs 0.3.0.
 
 Everything above is in place and tested on Linux, macOS and Windows. A scripted fake pi covers signals, the
 three handoffs, budgets, dependencies, blocking, exploration, progress events and stopping, and the real pi
@@ -222,9 +223,6 @@ Not done yet:
 
 - **Runs on real models.** The baselines and the cascade have not been run on real models yet, so the cost
   against solve rate comparison and calibration on real data are still to come.
-- **KM0 writing `task_ladders`.** The Runner can run each task on its own ladder, but KM0 1.0 still writes
-  one ladder for the whole run. Until KM0 writes `task_ladders`, it moves a task whose chosen model is not on
-  that ladder onto the ladder's model.
 
 What comes next and in which order is in [docs/ROADMAP.md](docs/ROADMAP.md). How a change goes from a branch
 to a release, and what has to change in KM0 alongside it, is in [CONTRIBUTING.md](CONTRIBUTING.md). Both are

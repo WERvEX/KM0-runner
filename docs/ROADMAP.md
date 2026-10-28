@@ -8,7 +8,7 @@
   - 0.2.0 加了 `progress.jsonl`、优雅停止和 `--version`。
   - 0.2.1 让 Windows 上不在 PATH 里的 Git Bash 也能找到。
   - 0.3.0 让每个任务可以带自己的阶梯（`task_ladders`）。
-- **KM0 1.0**：已发布，可以一键启动 Runner、显示进度、停止运行，并自动导入结果、验收。KM0 要求 Runner 至少是 0.2.0。
+- **KM0 1.0**：已发布，可以一键启动 Runner、显示进度、停止运行，并自动导入结果、验收。KM0 的 master 现在会给每个任务写出它自己的阶梯，要求 Runner 至少是 0.3.0（1.0.0 安装包要求 0.2.0）。
 - **测试**：CI 在 Linux、macOS、Windows 上跑全部测试，包括用真实 pi 跑的端到端测试，模型由脚本代答。
 - **缺口**：还没有在真实模型上跑过；也还没有在真实的 Windows 机器上，从 KM0 一键跑过一次。
 
@@ -19,7 +19,7 @@
 | M0 发布 0.2 | 合并进度与停止（#10）；KM0 1.0 发布 | Runner 已合并，差 tag；KM0 已发布 v1.0.0 |
 | M1 补完 Windows | 找 Git Bash；绘图测试进 CI；在真实 Windows 上跑通 | 代码部分已完成（0.2.1），差真机验证 |
 | M2 真实数据 | 在真实模型上跑基线和升档，得出成本与解决率 | 等 key 和预算 |
-| M3 每个任务带自己的阶梯 | 协议升级，Runner 和 KM0 都要改 | Runner 一侧已完成（0.3.0），KM0 一侧进行中 |
+| M3 每个任务带自己的阶梯 | 协议升级，Runner 和 KM0 都要改 | 已完成（Runner 0.3.0；KM0 要求 0.3.0） |
 | M4 闭环校准 | 用真实数据校准路由规则，结果回到 KM0 | 依赖 M2 |
 
 建议顺序：M0 → M1 → M2；M3 可以和 M2 并行，不过有了 M2 的数据更容易判断值不值得做；M4 在 M2 积累了足够的数据之后开始。
@@ -75,7 +75,7 @@ task_ladders:
 
 **两边要做的事**：
 - [x] Runner：`task_ladders` 配置、按任务取阶梯（起步、升档、合并冲突的解决）、报告的 `ladder` 字段、版本 0.3.0（[WERvEX/KM0-runner#14](https://github.com/WERvEX/KM0-runner/pull/14)）
-- [ ] KM0：生成配置时写出 `task_ladders`，把每个任务链上用到的模型都写进 `models.json` 并检查 key，去掉"挪到阶梯上"的提示，`fake-runner.mjs` 同步，`RUNNER_MIN_VERSION` 改为 0.3.0（[WERvEX/KM0#13](https://github.com/WERvEX/KM0/pull/13)，在本仓库合并后合并）
+- [x] KM0：生成配置时写出 `task_ladders`，把每个任务链上用到的模型都写进 `models.json` 并检查 key，去掉"挪到阶梯上"的提示，`fake-runner.mjs` 同步，`RUNNER_MIN_VERSION` 改为 0.3.0（[WERvEX/KM0#13](https://github.com/WERvEX/KM0/pull/13)）
 
 **完成标准**：Runner 0.3.0 发布；KM0 的 e2e，以及 `KM0_RUNNER_REAL` 下用真实 Runner 跑的集成测试，都在新配置下通过；没有 `task_ladders` 的配置照常能跑。
 
